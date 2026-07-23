@@ -121,7 +121,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.13</span></h1>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.15</span></h1>
 <div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
 
@@ -341,20 +341,23 @@ function handleNotification(event) {
   // Plausibilitätsprüfung. So wird nur das konkret beschädigte Feld verworfen,
   // nicht die ganze Nachricht - und korrupte Zahlen (falsche Werte durch
   // Byte-Fehler) werden erkannt statt unbemerkt übernommen.
-  function extractField(name, min, max) {
-    const m = jsonStr.match(new RegExp('"' + name + '":(-?[0-9]+\\.?[0-9]*)'));
+  function extractField(name, min, max, requireDecimal) {
+    const pattern = requireDecimal
+      ? '"' + name + '":(-?[0-9]+\\.[0-9]+)'   // MUSS Dezimalstelle haben (Gerät sendet nie nackte Ganzzahl)
+      : '"' + name + '":(-?[0-9]+\\.?[0-9]*)';
+    const m = jsonStr.match(new RegExp(pattern));
     if (!m) return null;
     const val = parseFloat(m[1]);
     if (isNaN(val) || val < min || val > max) return null;
     return val;
   }
 
-  const co2Val = extractField('co2', 0, 5000);
-  const humiVal = extractField('humi', 0, 100);
-  const tempVal = extractField('temp', -10, 60);
-  const vpdVal = extractField('vpd', 0, 10);
-  const tempSoilVal = extractField('tempSoil', -10, 60);
-  const humiSoilVal = extractField('humiSoil', 0, 100);
+  const co2Val = extractField('co2', 0, 5000, false);
+  const humiVal = extractField('humi', 0, 100, true);
+  const tempVal = extractField('temp', -10, 60, true);
+  const vpdVal = extractField('vpd', 0, 10, true);
+  const tempSoilVal = extractField('tempSoil', -10, 60, false);
+  const humiSoilVal = extractField('humiSoil', 0, 100, false);
 
   if (jsonStr.includes('"sensor"') && (co2Val !== null || humiVal !== null || tempVal !== null)) {
     rawOut.textContent = 'Sensorwerte extrahiert: temp=' + tempVal + ' humi=' + humiVal + ' co2=' + co2Val + ' vpd=' + vpdVal;
@@ -395,9 +398,9 @@ function processPayload(parsed) {
 
   if (co2 !== null) document.getElementById('valCo2').textContent = co2 + ' ppm';
   if (humi !== null) document.getElementById('valHumi').textContent = humi + ' %';
-  if (temp !== null) document.getElementById('valTemp').textContent = temp + ' °C';
+  if (temp !== null) document.getElementById('valTemp').textContent = temp.toFixed(1) + ' °C';
   if (vpd !== null) document.getElementById('valVpd').textContent = vpd + ' kPa';
-  if (tempSoil !== null) document.getElementById('valTempSoil').textContent = tempSoil + ' °C';
+  if (tempSoil !== null) document.getElementById('valTempSoil').textContent = tempSoil.toFixed(1) + ' °C';
   if (humiSoil !== null) document.getElementById('valHumiSoil').textContent = humiSoil + ' %';
 
   if (co2 !== null || humi !== null) {
@@ -447,8 +450,8 @@ const chart = new Chart(ctx, {
     animation: false,
     scales: {
       x: { ticks: { color: '#8b949e', maxTicksLimit: 6 }, grid: { color: '#21262d' } },
-      y: { position: 'left', min: 0, ticks: { color: '#d2a8ff' }, grid: { color: '#21262d' } },
-      y1: { position: 'right', min: 0, max: 100, ticks: { color: '#79c0ff' }, grid: { display: false } }
+      y: { position: 'left', ticks: { color: '#d2a8ff' }, grid: { color: '#21262d' } },
+      y1: { position: 'right', ticks: { color: '#79c0ff' }, grid: { display: false } }
     },
     plugins: { legend: { labels: { color: '#e6edf3' } } }
   }
@@ -513,8 +516,8 @@ const chart3 = new Chart(ctx3, {
     animation: false,
     scales: {
       x: { ticks: { color: '#8b949e', maxTicksLimit: 6 }, grid: { color: '#21262d' } },
-      y: { position: 'left', min: 0, ticks: { color: '#ff7b72' }, grid: { color: '#21262d' } },
-      y1: { position: 'right', min: 0, max: 100, ticks: { color: '#56d4dd' }, grid: { display: false } }
+      y: { position: 'left', ticks: { color: '#ff7b72' }, grid: { color: '#21262d' } },
+      y1: { position: 'right', ticks: { color: '#56d4dd' }, grid: { display: false } }
     },
     plugins: { legend: { labels: { color: '#e6edf3' } } }
   }

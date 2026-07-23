@@ -121,7 +121,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.11</span></h1>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.13</span></h1>
 <div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
 
@@ -154,6 +154,10 @@
 
 <div class="card">
   <div class="chart-container"><canvas id="chart2"></canvas></div>
+</div>
+
+<div class="card">
+  <div class="chart-container"><canvas id="chart3"></canvas></div>
 </div>
 
 <div class="card">
@@ -333,21 +337,30 @@ function handleNotification(event) {
   const jsonStr = jsonStrRaw;
   const jsonStrClean = jsonStrRaw.replace(/[^\x20-\x7E]/g, '');
 
-  // Robusteste Methode: Sensorwerte direkt per Regex extrahieren, unabhängig davon,
-  // ob die GESAMTE Nachricht valides JSON ist. Die bekannte Korruption sitzt immer
-  // im "blower"-Objekt, das NACH den Sensordaten kommt - wir brauchen es nicht.
-  const sensorMatch = jsonStr.match(/"sensor":\{[^}]*\}/);
-  if (sensorMatch) {
-    const sensorText = sensorMatch[0];
-    try {
-      const sensorObj = JSON.parse(sensorText.replace('"sensor":', ''));
-      rawOut.textContent = 'Sensorwerte per Regex extrahiert:\n' + JSON.stringify(sensorObj) + '\n\n--- Letzte Pakete ---\n' + packetHistory.join('\n---\n');
-      debugLog.push({ t: Date.now(), packetNum: packetCount, status: 'ok-regex', rawText: sensorText, errorMsg: '' });
-      processPayload({ sensor: sensorObj });
-      return;
-    } catch (eRegex) {
-      // Auch das direkte Sensor-Objekt war beschädigt, weiter zu den Fallbacks unten
-    }
+  // Robusteste Methode: jedes Sensorfeld EINZELN per Regex extrahieren, mit
+  // Plausibilitätsprüfung. So wird nur das konkret beschädigte Feld verworfen,
+  // nicht die ganze Nachricht - und korrupte Zahlen (falsche Werte durch
+  // Byte-Fehler) werden erkannt statt unbemerkt übernommen.
+  function extractField(name, min, max) {
+    const m = jsonStr.match(new RegExp('"' + name + '":(-?[0-9]+\\.?[0-9]*)'));
+    if (!m) return null;
+    const val = parseFloat(m[1]);
+    if (isNaN(val) || val < min || val > max) return null;
+    return val;
+  }
+
+  const co2Val = extractField('co2', 0, 5000);
+  const humiVal = extractField('humi', 0, 100);
+  const tempVal = extractField('temp', -10, 60);
+  const vpdVal = extractField('vpd', 0, 10);
+  const tempSoilVal = extractField('tempSoil', -10, 60);
+  const humiSoilVal = extractField('humiSoil', 0, 100);
+
+  if (jsonStr.includes('"sensor"') && (co2Val !== null || humiVal !== null || tempVal !== null)) {
+    rawOut.textContent = 'Sensorwerte extrahiert: temp=' + tempVal + ' humi=' + humiVal + ' co2=' + co2Val + ' vpd=' + vpdVal;
+    debugLog.push({ t: Date.now(), packetNum: packetCount, status: 'ok-field-extract', rawText: jsonStrRaw, errorMsg: '' });
+    processPayload({ sensor: { co2: co2Val, humi: humiVal, temp: tempVal, vpd: vpdVal, tempSoil: tempSoilVal, humiSoil: humiSoilVal } });
+    return;
   }
 
   try {
@@ -434,8 +447,8 @@ const chart = new Chart(ctx, {
     animation: false,
     scales: {
       x: { ticks: { color: '#8b949e', maxTicksLimit: 6 }, grid: { color: '#21262d' } },
-      y: { position: 'left', ticks: { color: '#d2a8ff' }, grid: { color: '#21262d' } },
-      y1: { position: 'right', ticks: { color: '#79c0ff' }, grid: { display: false } }
+      y: { position: 'left', min: 0, ticks: { color: '#d2a8ff' }, grid: { color: '#21262d' } },
+      y1: { position: 'right', min: 0, max: 100, ticks: { color: '#79c0ff' }, grid: { display: false } }
     },
     plugins: { legend: { labels: { color: '#e6edf3' } } }
   }
@@ -452,6 +465,11 @@ function updateChart() {
   chart2.data.datasets[0].data = recent.map(p => p.temp);
   chart2.data.datasets[1].data = recent.map(p => p.vpd);
   chart2.update('none');
+
+  chart3.data.labels = chart.data.labels;
+  chart3.data.datasets[0].data = recent.map(p => p.tempSoil);
+  chart3.data.datasets[1].data = recent.map(p => p.humiSoil);
+  chart3.update('none');
 }
 
 // Chart 2: Temp & VPD
@@ -473,6 +491,30 @@ const chart2 = new Chart(ctx2, {
       x: { ticks: { color: '#8b949e', maxTicksLimit: 6 }, grid: { color: '#21262d' } },
       y: { position: 'left', ticks: { color: '#ffa657' }, grid: { color: '#21262d' } },
       y1: { position: 'right', ticks: { color: '#7ee787' }, grid: { display: false } }
+    },
+    plugins: { legend: { labels: { color: '#e6edf3' } } }
+  }
+});
+
+// Chart 3: Bodendaten
+const ctx3 = document.getElementById('chart3').getContext('2d');
+const chart3 = new Chart(ctx3, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      { label: 'Boden-Temp (°C)', data: [], borderColor: '#ff7b72', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
+      { label: 'Boden-Feuchte (%)', data: [], borderColor: '#56d4dd', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2 }
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    scales: {
+      x: { ticks: { color: '#8b949e', maxTicksLimit: 6 }, grid: { color: '#21262d' } },
+      y: { position: 'left', min: 0, ticks: { color: '#ff7b72' }, grid: { color: '#21262d' } },
+      y1: { position: 'right', min: 0, max: 100, ticks: { color: '#56d4dd' }, grid: { display: false } }
     },
     plugins: { legend: { labels: { color: '#e6edf3' } } }
   }

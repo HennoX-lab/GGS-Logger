@@ -134,6 +134,10 @@
 </div>
 
 <div class="card">
+  <canvas id="chart2"></canvas>
+</div>
+
+<div class="card">
   <button id="exportBtn" class="secondary">CSV exportieren</button>
   <button id="clearBtn" class="danger" style="margin-top:8px;">Log leeren</button>
 </div>
@@ -198,13 +202,13 @@ function onDisconnected() {
 }
 
 let packetCount = 0;
+let packetHistory = [];
 
 function stripPacketHeader(bytes) {
-  // Jedes Paket beginnt mit einem 19-Byte-Kopfbereich, erkennbar am Magic-Marker 0xAA 0xAA
   if (bytes.length >= 19 && bytes[0] === 0xAA && bytes[1] === 0xAA) {
     return bytes.slice(19);
   }
-  return bytes; // Fortsetzungspaket ohne eigenen Kopf, unverändert übernehmen
+  return bytes;
 }
 
 function handleNotification(event) {
@@ -214,10 +218,11 @@ function handleNotification(event) {
   const payloadBytes = stripPacketHeader(rawBytes);
   for (const b of payloadBytes) byteBuffer.push(b);
 
-  // Sofortige Debug-Anzeige, unabhängig vom Parse-Erfolg
-  const hex = Array.from(rawBytes).map(b => b.toString(16).padStart(2,'0')).join(' ');
   const asText = new TextDecoder('utf-8', { fatal: false }).decode(payloadBytes);
-  rawOut.textContent = `Paket #${packetCount} (${rawBytes.length} Bytes, Header ${rawBytes.length - payloadBytes.length} entfernt)\nHex: ${hex}\nPayload-Text: ${asText}\n---\nPuffer gesamt: ${byteBuffer.length} Bytes`;
+  const hadHeader = rawBytes.length !== payloadBytes.length;
+  packetHistory.push(`#${packetCount} [${hadHeader ? 'H' : '-'}] (${payloadBytes.length}B): "${asText}"`);
+  if (packetHistory.length > 8) packetHistory.shift();
+  rawOut.textContent = packetHistory.join('\n---\n');
 
   const text = new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(byteBuffer));
   const firstBrace = text.indexOf('{');
@@ -234,18 +239,27 @@ function handleNotification(event) {
   const jsonStrRaw = candidate.slice(0, endIdx + 1);
   byteBuffer = [];
 
-  // Bereinigung: entferne Zeichen, die an keiner Stelle in gültigem JSON auftauchen dürfen
-  // (Controller fügt offenbar vereinzelt Fragment-Marker wie '%' mitten in den Datenstrom ein)
-  const jsonStr = jsonStrRaw.replace(/[^\x20-\x7E]|[%^~`]/g, (m) => {
-    // Erlaubte JSON-Zeichen (Buchstaben, Zahlen, Satzzeichen für JSON-Syntax) bleiben,
-    // alles außerhalb des normalen Zeichensatzes bzw. bekannte Störzeichen werden entfernt
-    return '';
-  });
-
-  rawOut.textContent = 'JSON erkannt (bereinigt):\n' + jsonStr;
-  if (jsonStr !== jsonStrRaw) {
-    rawOut.textContent += '\n\n[Original vor Bereinigung wich ab - Störzeichen entfernt]';
+  // Nur Nachrichten verarbeiten, die tatsächlich Sensordaten enthalten -
+  // andere Nachrichtentypen (fan/light/mqtt/bluetooth-Status) still überspringen,
+  // das vermeidet auch die Parse-Fehler bei diesen für uns irrelevanten Nachrichten
+  if (!jsonStrRaw.includes('"temp"') && !jsonStrRaw.includes('"co2"') && !jsonStrRaw.includes('"sensor"')) {
+    packetHistory.push(`[übersprungen: keine Sensordaten in dieser Nachricht]`);
+    if (packetHistory.length > 8) packetHistory.shift();
+    rawOut.textContent = packetHistory.join('\n---\n');
+    return;
   }
+
+  const jsonStr = jsonStrRaw.replace(/[^\x20-\x7E]|[%^~`]/g, '');
+
+  try {
+    const parsed = JSON.parse(jsonStr);
+    rawOut.textContent = 'JSON erfolgreich geparst:\n' + jsonStr + '\n\n--- Letzte Pakete ---\n' + packetHistory.join('\n---\n');
+    processPayload(parsed);
+  } catch (e) {
+    rawOut.textContent = 'PARSE-FEHLER: ' + e.message + '\n\nJSON (bereinigt):\n' + jsonStr + '\n\n--- Letzte Pakete (zeigt Fugenstelle) ---\n' + packetHistory.join('\n---\n');
+    console.warn('JSON parse failed', e, jsonStr);
+  }
+}
 
   try {
     const parsed = JSON.parse(jsonStr);
@@ -306,7 +320,35 @@ function updateChart() {
   chart.data.datasets[0].data = recent.map(p => p.co2);
   chart.data.datasets[1].data = recent.map(p => p.humi);
   chart.update('none');
+
+  chart2.data.labels = chart.data.labels;
+  chart2.data.datasets[0].data = recent.map(p => p.temp);
+  chart2.data.datasets[1].data = recent.map(p => p.vpd);
+  chart2.update('none');
 }
+
+// Chart 2: Temp & VPD
+const ctx2 = document.getElementById('chart2').getContext('2d');
+const chart2 = new Chart(ctx2, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      { label: 'Temp (°C)', data: [], borderColor: '#ffa657', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
+      { label: 'VPD (kPa)', data: [], borderColor: '#7ee787', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2 }
+    ]
+  },
+  options: {
+    responsive: true,
+    animation: false,
+    scales: {
+      x: { ticks: { color: '#8b949e', maxTicksLimit: 6 }, grid: { color: '#21262d' } },
+      y: { position: 'left', ticks: { color: '#ffa657' }, grid: { color: '#21262d' } },
+      y1: { position: 'right', ticks: { color: '#7ee787' }, grid: { display: false } }
+    },
+    plugins: { legend: { labels: { color: '#e6edf3' } } }
+  }
+});
 
 document.getElementById('exportBtn').addEventListener('click', () => {
   let csv = 'Zeitstempel;CO2_ppm;Feuchte_%;Temp_C;VPD_kPa\n';

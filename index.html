@@ -254,6 +254,23 @@ function handleNotification(event) {
   const jsonStr = jsonStrRaw;
   const jsonStrClean = jsonStrRaw.replace(/[^\x20-\x7E]/g, '');
 
+  // Robusteste Methode: Sensorwerte direkt per Regex extrahieren, unabhängig davon,
+  // ob die GESAMTE Nachricht valides JSON ist. Die bekannte Korruption sitzt immer
+  // im "blower"-Objekt, das NACH den Sensordaten kommt - wir brauchen es nicht.
+  const sensorMatch = jsonStr.match(/"sensor":\{[^}]*\}/);
+  if (sensorMatch) {
+    const sensorText = sensorMatch[0];
+    try {
+      const sensorObj = JSON.parse(sensorText.replace('"sensor":', ''));
+      rawOut.textContent = 'Sensorwerte per Regex extrahiert:\n' + JSON.stringify(sensorObj) + '\n\n--- Letzte Pakete ---\n' + packetHistory.join('\n---\n');
+      debugLog.push({ t: Date.now(), packetNum: packetCount, status: 'ok-regex', rawText: sensorText, errorMsg: '' });
+      processPayload({ sensor: sensorObj });
+      return;
+    } catch (eRegex) {
+      // Auch das direkte Sensor-Objekt war beschädigt, weiter zu den Fallbacks unten
+    }
+  }
+
   try {
     const parsed = JSON.parse(jsonStr);
     rawOut.textContent = 'JSON erfolgreich geparst:\n' + jsonStr + '\n\n--- Letzte Pakete ---\n' + packetHistory.join('\n---\n');

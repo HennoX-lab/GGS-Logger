@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GGS Live-Logger — HennoX Amethyst</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, 'Segoe UI', Roboto, sans-serif;
+    background: #0b0f14;
+    color: #e6edf3;
+    min-height: 100vh;
+    padding: 16px;
+  }
+  h1 {
+    font-size: 1.3rem;
+    margin: 0 0 4px 0;
+    color: #7ee787;
+  }
+  .sub {
+    color: #8b949e;
+    font-size: 0.85rem;
+    margin-bottom: 16px;
+  }
+  .card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 14px;
+  }
+  .status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #f85149;
+    flex-shrink: 0;
+  }
+  .dot.connected { background: #3fb950; }
+  .dot.connecting { background: #d29922; animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: 0.4; } }
+  button {
+    background: #238636;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 12px 18px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    width: 100%;
+  }
+  button:disabled { background: #30363d; color: #6e7681; }
+  button.secondary { background: #21262d; border: 1px solid #30363d; margin-top: 8px; }
+  button.danger { background: #da3633; }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 14px;
+  }
+  .metric {
+    background: #0d1117;
+    border-radius: 8px;
+    padding: 10px;
+    text-align: center;
+  }
+  .metric .label { font-size: 0.7rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; }
+  .metric .value { font-size: 1.6rem; font-weight: 700; margin-top: 2px; }
+  .metric.co2 .value { color: #d2a8ff; }
+  .metric.humi .value { color: #79c0ff; }
+  .metric.temp .value { color: #ffa657; }
+  .metric.vpd .value { color: #7ee787; }
+  .log-count { font-size: 0.8rem; color: #8b949e; margin-top: 10px; }
+  canvas { max-height: 220px; }
+  .raw {
+    font-family: monospace;
+    font-size: 0.7rem;
+    color: #6e7681;
+    background: #0d1117;
+    padding: 8px;
+    border-radius: 6px;
+    max-height: 100px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin-top: 10px;
+  }
+  .warn {
+    background: #3d2b00;
+    border: 1px solid #9e6a03;
+    color: #d29922;
+    border-radius: 8px;
+    padding: 10px;
+    font-size: 0.8rem;
+    margin-bottom: 14px;
+  }
+</style>
+</head>
+<body>
+
+<h1>🌱 GGS Live-Logger</h1>
+<div class="sub">Sekundengenaues CO2/Klima-Log für HennoX Amethyst — experimentell, basiert auf Reverse-Engineering von cr0ssn0tice</div>
+
+<div class="warn">⚠️ Experimentell: Protokoll ist community-reverse-engineered, nicht offiziell. Falls "CO2 Anlage" oder ähnliche Felder im Rohdatenfeld unten nicht auftauchen, sag mir den genauen Text — dann pass ich den Parser an.</div>
+
+<div class="card">
+  <div class="status-row">
+    <div class="dot" id="dot"></div>
+    <span id="statusText">Nicht verbunden</span>
+  </div>
+  <button id="connectBtn">Mit GGS Controller verbinden</button>
+  <button id="disconnectBtn" class="secondary" style="display:none;">Trennen</button>
+
+  <div class="grid">
+    <div class="metric co2"><div class="label">CO2</div><div class="value" id="valCo2">—</div></div>
+    <div class="metric humi"><div class="label">Feuchte</div><div class="value" id="valHumi">—</div></div>
+    <div class="metric temp"><div class="label">Temp</div><div class="value" id="valTemp">—</div></div>
+    <div class="metric vpd"><div class="label">VPD</div><div class="value" id="valVpd">—</div></div>
+  </div>
+
+  <div class="log-count" id="logCount">0 Messpunkte aufgezeichnet</div>
+</div>
+
+<div class="card">
+  <canvas id="chart"></canvas>
+</div>
+
+<div class="card">
+  <button id="exportBtn" class="secondary">CSV exportieren</button>
+  <button id="clearBtn" class="danger" style="margin-top:8px;">Log leeren</button>
+</div>
+
+<div class="card">
+  <div class="label" style="font-size:0.75rem;color:#8b949e;margin-bottom:6px;">Letztes Rohsignal (Debug)</div>
+  <div class="raw" id="rawOut">–</div>
+</div>
+
+<script>
+const SERVICE_UUID = 0xff00;
+const NOTIFY_UUID = 0xff01;
+
+let device, server, notifyChar;
+let dataLog = []; // {t: timestamp, co2, humi, temp, vpd}
+let byteBuffer = [];
+
+const dot = document.getElementById('dot');
+const statusText = document.getElementById('statusText');
+const connectBtn = document.getElementById('connectBtn');
+const disconnectBtn = document.getElementById('disconnectBtn');
+const rawOut = document.getElementById('rawOut');
+const logCount = document.getElementById('logCount');
+
+function setStatus(state, text) {
+  dot.className = 'dot ' + state;
+  statusText.textContent = text;
+}
+
+connectBtn.addEventListener('click', async () => {
+  try {
+    setStatus('connecting', 'Suche Gerät…');
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'SF-GGS' }],
+      optionalServices: [SERVICE_UUID]
+    });
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    setStatus('connecting', 'Verbinde…');
+    server = await device.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE_UUID);
+    notifyChar = await service.getCharacteristic(NOTIFY_UUID);
+    await notifyChar.startNotifications();
+    notifyChar.addEventListener('characteristicvaluechanged', handleNotification);
+    setStatus('connected', 'Verbunden: ' + device.name);
+    connectBtn.style.display = 'none';
+    disconnectBtn.style.display = 'block';
+  } catch (err) {
+    setStatus('', 'Fehler: ' + err.message);
+    console.error(err);
+  }
+});
+
+disconnectBtn.addEventListener('click', () => {
+  if (device && device.gatt.connected) device.gatt.disconnect();
+});
+
+function onDisconnected() {
+  setStatus('', 'Getrennt');
+  connectBtn.style.display = 'block';
+  disconnectBtn.style.display = 'none';
+}
+
+function handleNotification(event) {
+  const value = event.target.value;
+  const bytes = new Uint8Array(value.buffer);
+  for (const b of bytes) byteBuffer.push(b);
+
+  // Versuche, vollständiges JSON zu extrahieren (endet auf "}}")
+  const text = new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(byteBuffer));
+  const firstBrace = text.indexOf('{');
+  if (firstBrace === -1) return;
+  const candidate = text.slice(firstBrace);
+
+  // Zähle Klammerbalance um zu sehen ob vollständig
+  let depth = 0, endIdx = -1;
+  for (let i = 0; i < candidate.length; i++) {
+    if (candidate[i] === '{') depth++;
+    if (candidate[i] === '}') { depth--; if (depth === 0) { endIdx = i; break; } }
+  }
+  if (endIdx === -1) return; // noch nicht vollständig, weiter puffern
+
+  const jsonStr = candidate.slice(0, endIdx + 1);
+  byteBuffer = []; // Puffer zurücksetzen
+
+  rawOut.textContent = jsonStr;
+
+  try {
+    const parsed = JSON.parse(jsonStr);
+    processPayload(parsed);
+  } catch (e) {
+    // Kein valides JSON, verwerfen
+    console.warn('JSON parse failed', e, jsonStr);
+  }
+}
+
+function processPayload(parsed) {
+  const d = parsed.data || parsed;
+  const sensor = d.sensor || d;
+
+  const co2 = sensor.co2 ?? sensor.CO2 ?? sensor.co2ppm ?? null;
+  const humi = sensor.humi ?? sensor.humidity ?? null;
+  const temp = sensor.temp ?? sensor.temperature ?? null;
+  const vpd = sensor.vpd ?? null;
+
+  if (co2 !== null) document.getElementById('valCo2').textContent = co2 + ' ppm';
+  if (humi !== null) document.getElementById('valHumi').textContent = humi + ' %';
+  if (temp !== null) document.getElementById('valTemp').textContent = temp + ' °C';
+  if (vpd !== null) document.getElementById('valVpd').textContent = vpd + ' kPa';
+
+  if (co2 !== null || humi !== null) {
+    dataLog.push({ t: Date.now(), co2, humi, temp, vpd });
+    logCount.textContent = dataLog.length + ' Messpunkte aufgezeichnet';
+    updateChart();
+  }
+}
+
+// Chart Setup
+const ctx = document.getElementById('chart').getContext('2d');
+const chart = new Chart(ctx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      { label: 'CO2 (ppm)', data: [], borderColor: '#d2a8ff', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
+      { label: 'Feuchte (%)', data: [], borderColor: '#79c0ff', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2 }
+    ]
+  },
+  options: {
+    responsive: true,
+    animation: false,
+    scales: {
+      x: { ticks: { color: '#8b949e', maxTicksLimit: 6 }, grid: { color: '#21262d' } },
+      y: { position: 'left', ticks: { color: '#d2a8ff' }, grid: { color: '#21262d' } },
+      y1: { position: 'right', ticks: { color: '#79c0ff' }, grid: { display: false } }
+    },
+    plugins: { legend: { labels: { color: '#e6edf3' } } }
+  }
+});
+
+function updateChart() {
+  const recent = dataLog.slice(-120); // letzte 120 Punkte
+  chart.data.labels = recent.map(p => new Date(p.t).toLocaleTimeString('de-DE', {hour:'2-digit',minute:'2-digit',second:'2-digit'}));
+  chart.data.datasets[0].data = recent.map(p => p.co2);
+  chart.data.datasets[1].data = recent.map(p => p.humi);
+  chart.update('none');
+}
+
+document.getElementById('exportBtn').addEventListener('click', () => {
+  let csv = 'Zeitstempel;CO2_ppm;Feuchte_%;Temp_C;VPD_kPa\n';
+  dataLog.forEach(p => {
+    csv += new Date(p.t).toISOString() + ';' + (p.co2 ?? '') + ';' + (p.humi ?? '') + ';' + (p.temp ?? '') + ';' + (p.vpd ?? '') + '\n';
+  });
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'ggs_log_' + new Date().toISOString().slice(0,19).replace(/[:T]/g,'-') + '.csv';
+  a.click();
+});
+
+document.getElementById('clearBtn').addEventListener('click', () => {
+  dataLog = [];
+  logCount.textContent = '0 Messpunkte aufgezeichnet';
+  updateChart();
+});
+
+if (!navigator.bluetooth) {
+  setStatus('', 'Web Bluetooth nicht verfügbar — nutze Chrome auf Android');
+  connectBtn.disabled = true;
+}
+</script>
+</body>
+</html>

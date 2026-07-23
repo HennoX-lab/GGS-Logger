@@ -261,15 +261,6 @@ function handleNotification(event) {
   }
 }
 
-  try {
-    const parsed = JSON.parse(jsonStr);
-    processPayload(parsed);
-  } catch (e) {
-    rawOut.textContent += '\n\nPARSE-FEHLER: ' + e.message;
-    console.warn('JSON parse failed', e, jsonStr);
-  }
-}
-
 function processPayload(parsed) {
   const d = parsed.data || parsed;
   const sensor = d.sensor || d;

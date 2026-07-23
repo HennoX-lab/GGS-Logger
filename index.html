@@ -231,10 +231,21 @@ function handleNotification(event) {
   }
   if (endIdx === -1) return;
 
-  const jsonStr = candidate.slice(0, endIdx + 1);
+  const jsonStrRaw = candidate.slice(0, endIdx + 1);
   byteBuffer = [];
 
-  rawOut.textContent = 'JSON erkannt:\n' + jsonStr;
+  // Bereinigung: entferne Zeichen, die an keiner Stelle in gültigem JSON auftauchen dürfen
+  // (Controller fügt offenbar vereinzelt Fragment-Marker wie '%' mitten in den Datenstrom ein)
+  const jsonStr = jsonStrRaw.replace(/[^\x20-\x7E]|[%^~`]/g, (m) => {
+    // Erlaubte JSON-Zeichen (Buchstaben, Zahlen, Satzzeichen für JSON-Syntax) bleiben,
+    // alles außerhalb des normalen Zeichensatzes bzw. bekannte Störzeichen werden entfernt
+    return '';
+  });
+
+  rawOut.textContent = 'JSON erkannt (bereinigt):\n' + jsonStr;
+  if (jsonStr !== jsonStrRaw) {
+    rawOut.textContent += '\n\n[Original vor Bereinigung wich ab - Störzeichen entfernt]';
+  }
 
   try {
     const parsed = JSON.parse(jsonStr);

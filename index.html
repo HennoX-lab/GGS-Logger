@@ -121,7 +121,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.16</span></h1>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.17</span></h1>
 <div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
 
@@ -394,12 +394,14 @@ function processPayload(parsed) {
   const d = parsed.data || parsed;
   const sensor = d.sensor || d;
 
-  const co2 = sensor.co2 ?? sensor.CO2 ?? sensor.co2ppm ?? null;
-  const humi = sensor.humi ?? sensor.humidity ?? null;
-  const temp = sensor.temp ?? sensor.temperature ?? null;
-  const vpd = sensor.vpd ?? null;
-  const tempSoil = sensor.tempSoil ?? null;
-  const humiSoil = sensor.humiSoil ?? null;
+  const last = dataLog.length > 0 ? dataLog[dataLog.length - 1] : {};
+
+  const co2 = sensor.co2 ?? last.co2 ?? null;
+  const humi = sensor.humi ?? last.humi ?? null;
+  const temp = sensor.temp ?? last.temp ?? null;
+  const vpd = sensor.vpd ?? last.vpd ?? null;
+  const tempSoil = sensor.tempSoil ?? last.tempSoil ?? null;
+  const humiSoil = sensor.humiSoil ?? last.humiSoil ?? null;
 
   if (co2 !== null) document.getElementById('valCo2').textContent = co2 + ' ppm';
   if (humi !== null) document.getElementById('valHumi').textContent = humi + ' %';
@@ -445,8 +447,8 @@ const chart = new Chart(ctx, {
   data: {
     labels: [],
     datasets: [
-      { label: 'CO2 (ppm)', data: [], borderColor: '#d2a8ff', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
-      { label: 'Feuchte (%)', data: [], borderColor: '#79c0ff', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2 }
+      { label: 'CO2 (ppm)', data: [], borderColor: '#d2a8ff', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2, spanGaps: true },
+      { label: 'Feuchte (%)', data: [], borderColor: '#79c0ff', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2, spanGaps: true }
     ]
   },
   options: {
@@ -487,8 +489,8 @@ const chart2 = new Chart(ctx2, {
   data: {
     labels: [],
     datasets: [
-      { label: 'Temp (°C)', data: [], borderColor: '#ffa657', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
-      { label: 'VPD (kPa)', data: [], borderColor: '#7ee787', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2 }
+      { label: 'Temp (°C)', data: [], borderColor: '#ffa657', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2, spanGaps: true },
+      { label: 'VPD (kPa)', data: [], borderColor: '#7ee787', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2, spanGaps: true }
     ]
   },
   options: {
@@ -511,8 +513,8 @@ const chart3 = new Chart(ctx3, {
   data: {
     labels: [],
     datasets: [
-      { label: 'Boden-Temp (°C)', data: [], borderColor: '#ff7b72', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
-      { label: 'Boden-Feuchte (%)', data: [], borderColor: '#56d4dd', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2 }
+      { label: 'Boden-Temp (°C)', data: [], borderColor: '#ff7b72', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2, spanGaps: true },
+      { label: 'Boden-Feuchte (%)', data: [], borderColor: '#56d4dd', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2, spanGaps: true }
     ]
   },
   options: {

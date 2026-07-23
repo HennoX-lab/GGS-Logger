@@ -138,7 +138,8 @@
 </div>
 
 <div class="card">
-  <button id="exportBtn" class="secondary">CSV exportieren</button>
+  <button id="exportBtn" class="secondary">CSV exportieren (Sensordaten)</button>
+  <button id="exportDebugBtn" class="secondary" style="margin-top:8px;">CSV exportieren (Debug-Log, alle Pakete)</button>
   <button id="clearBtn" class="danger" style="margin-top:8px;">Log leeren</button>
 </div>
 
@@ -203,6 +204,7 @@ function onDisconnected() {
 
 let packetCount = 0;
 let packetHistory = [];
+let debugLog = []; // {t, packetNum, status, rawText, errorMsg}
 
 function stripPacketHeader(bytes) {
   if (bytes.length >= 19 && bytes[0] === 0xAA && bytes[1] === 0xAA) {
@@ -239,13 +241,11 @@ function handleNotification(event) {
   const jsonStrRaw = candidate.slice(0, endIdx + 1);
   byteBuffer = [];
 
-  // Nur Nachrichten verarbeiten, die tatsächlich Sensordaten enthalten -
-  // andere Nachrichtentypen (fan/light/mqtt/bluetooth-Status) still überspringen,
-  // das vermeidet auch die Parse-Fehler bei diesen für uns irrelevanten Nachrichten
   if (!jsonStrRaw.includes('"temp"') && !jsonStrRaw.includes('"co2"') && !jsonStrRaw.includes('"sensor"')) {
     packetHistory.push(`[übersprungen: keine Sensordaten in dieser Nachricht]`);
     if (packetHistory.length > 8) packetHistory.shift();
     rawOut.textContent = packetHistory.join('\n---\n');
+    debugLog.push({ t: Date.now(), packetNum: packetCount, status: 'skipped', rawText: jsonStrRaw, errorMsg: '' });
     return;
   }
 
@@ -254,10 +254,12 @@ function handleNotification(event) {
   try {
     const parsed = JSON.parse(jsonStr);
     rawOut.textContent = 'JSON erfolgreich geparst:\n' + jsonStr + '\n\n--- Letzte Pakete ---\n' + packetHistory.join('\n---\n');
+    debugLog.push({ t: Date.now(), packetNum: packetCount, status: 'ok', rawText: jsonStr, errorMsg: '' });
     processPayload(parsed);
   } catch (e) {
     rawOut.textContent = 'PARSE-FEHLER: ' + e.message + '\n\nJSON (bereinigt):\n' + jsonStr + '\n\n--- Letzte Pakete (zeigt Fugenstelle) ---\n' + packetHistory.join('\n---\n');
     console.warn('JSON parse failed', e, jsonStr);
+    debugLog.push({ t: Date.now(), packetNum: packetCount, status: 'error', rawText: jsonStrRaw, errorMsg: e.message });
   }
 }
 
@@ -354,8 +356,24 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   a.click();
 });
 
+document.getElementById('exportDebugBtn').addEventListener('click', () => {
+  let csv = 'Zeitstempel;Paket_Nr;Status;RohText;Fehlermeldung\n';
+  debugLog.forEach(p => {
+    const safeRaw = '"' + String(p.rawText).replace(/"/g, '""') + '"';
+    const safeErr = '"' + String(p.errorMsg).replace(/"/g, '""') + '"';
+    csv += new Date(p.t).toISOString() + ';' + p.packetNum + ';' + p.status + ';' + safeRaw + ';' + safeErr + '\n';
+  });
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'ggs_debug_log_' + new Date().toISOString().slice(0,19).replace(/[:T]/g,'-') + '.csv';
+  a.click();
+});
+
 document.getElementById('clearBtn').addEventListener('click', () => {
   dataLog = [];
+  debugLog = [];
   logCount.textContent = '0 Messpunkte aufgezeichnet';
   updateChart();
 });

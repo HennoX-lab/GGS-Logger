@@ -204,13 +204,20 @@ function onDisconnected() {
 
 let packetCount = 0;
 let packetHistory = [];
-let debugLog = []; // {t, packetNum, status, rawText, errorMsg}
+let debugLog = [];
+let awaitingNewMessage = true; // true = nächstes Paket ist Nachrichtenanfang
 
 function stripPacketHeader(bytes) {
-  if (bytes.length >= 19 && bytes[0] === 0xAA && bytes[1] === 0xAA) {
-    return bytes.slice(19);
+  if (awaitingNewMessage) {
+    awaitingNewMessage = false;
+    if (bytes.length >= 19 && bytes[0] === 0xAA && bytes[1] === 0xAA) {
+      return bytes.slice(19);
+    }
+    return bytes;
+  } else {
+    // Fortsetzungspaket: trägt 1 führendes Steuer-/Zählbyte, das nicht zum JSON gehört
+    return bytes.slice(1);
   }
-  return bytes;
 }
 
 function handleNotification(event) {
@@ -240,6 +247,7 @@ function handleNotification(event) {
 
   const jsonStrRaw = candidate.slice(0, endIdx + 1);
   byteBuffer = [];
+  awaitingNewMessage = true; // Nachricht abgeschlossen, nächstes Paket ist wieder Nachrichtenanfang
 
   if (!jsonStrRaw.includes('"temp"') && !jsonStrRaw.includes('"co2"') && !jsonStrRaw.includes('"sensor"')) {
     packetHistory.push(`[übersprungen: keine Sensordaten in dieser Nachricht]`);
@@ -249,7 +257,7 @@ function handleNotification(event) {
     return;
   }
 
-  const jsonStr = jsonStrRaw.replace(/[^\x20-\x7E]|[%^~`]/g, '');
+  const jsonStr = jsonStrRaw;
 
   try {
     const parsed = JSON.parse(jsonStr);

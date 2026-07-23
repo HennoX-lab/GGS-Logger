@@ -199,18 +199,26 @@ function onDisconnected() {
 
 let packetCount = 0;
 
+function stripPacketHeader(bytes) {
+  // Jedes Paket beginnt mit einem 19-Byte-Kopfbereich, erkennbar am Magic-Marker 0xAA 0xAA
+  if (bytes.length >= 19 && bytes[0] === 0xAA && bytes[1] === 0xAA) {
+    return bytes.slice(19);
+  }
+  return bytes; // Fortsetzungspaket ohne eigenen Kopf, unverändert übernehmen
+}
+
 function handleNotification(event) {
   packetCount++;
   const value = event.target.value;
-  const bytes = new Uint8Array(value.buffer);
-  for (const b of bytes) byteBuffer.push(b);
+  const rawBytes = new Uint8Array(value.buffer);
+  const payloadBytes = stripPacketHeader(rawBytes);
+  for (const b of payloadBytes) byteBuffer.push(b);
 
   // Sofortige Debug-Anzeige, unabhängig vom Parse-Erfolg
-  const hex = Array.from(bytes).map(b => b.toString(16).padStart(2,'0')).join(' ');
-  const asText = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-  rawOut.textContent = `Paket #${packetCount} (${bytes.length} Bytes)\nHex: ${hex}\nText: ${asText}\n---\nPuffer gesamt: ${byteBuffer.length} Bytes`;
+  const hex = Array.from(rawBytes).map(b => b.toString(16).padStart(2,'0')).join(' ');
+  const asText = new TextDecoder('utf-8', { fatal: false }).decode(payloadBytes);
+  rawOut.textContent = `Paket #${packetCount} (${rawBytes.length} Bytes, Header ${rawBytes.length - payloadBytes.length} entfernt)\nHex: ${hex}\nPayload-Text: ${asText}\n---\nPuffer gesamt: ${byteBuffer.length} Bytes`;
 
-  // Versuche, vollständiges JSON zu extrahieren (endet auf "}}")
   const text = new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(byteBuffer));
   const firstBrace = text.indexOf('{');
   if (firstBrace === -1) return;

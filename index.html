@@ -121,7 +121,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.21</span></h1>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.24</span></h1>
 <div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
 
@@ -149,8 +149,6 @@
     <div class="metric"><div class="label">Licht-Stufe</div><div class="value" style="color:#e3b341;font-size:1.2rem;" id="valLightLevel">—</div></div>
     <div class="metric"><div class="label">Inline-Lüfter</div><div class="value" style="color:#a5a5f0;font-size:1.2rem;" id="valBlowerLevel">—</div></div>
     <div class="metric"><div class="label">CO2-Steckdose</div><div class="value" style="color:#d2a8ff;font-size:1.2rem;" id="valCo2Socket">—</div></div>
-    <div class="metric"><div class="label">Umluft-Fan-Gang</div><div class="value" style="color:#39c5cf;font-size:1.2rem;" id="valFanLevel">—</div></div>
-    <div class="metric"><div class="label">Umluft-Oszillation</div><div class="value" style="color:#f778ba;font-size:1.2rem;" id="valFanOsc">—</div></div>
   </div>
 
   <div class="log-count" id="logCount">0 Messpunkte aufgezeichnet</div>
@@ -177,10 +175,6 @@
 </div>
 
 <div class="card">
-  <div class="chart-container"><canvas id="chart6"></canvas></div>
-</div>
-
-<div class="card">
   <button id="exportBtn" class="secondary">CSV exportieren (Sensordaten)</button>
   <button id="exportDebugBtn" class="secondary" style="margin-top:8px;">CSV exportieren (Debug-Log, alle Pakete)</button>
   <button id="clearBtn" class="danger" style="margin-top:8px;">Log leeren</button>
@@ -197,6 +191,7 @@ let dataLog = [];
 let byteBuffer = [];
 let wakeLock = null;
 let shouldAutoReconnect = false;
+let lastPacketTimestamp = null;
 
 function saveToLocalStorage() {
   try {
@@ -227,6 +222,26 @@ const connectBtn = document.getElementById('connectBtn');
 const disconnectBtn = document.getElementById('disconnectBtn');
 const rawOut = document.getElementById('rawOut');
 const logCount = document.getElementById('logCount');
+
+// Wachhund: erkennt "Zombie"-Verbindungen (Browser meldet "verbunden",
+// aber es kommen keine Pakete mehr an) und erzwingt in diesem Fall einen
+// Reconnect, unabhängig davon, ob der Browser selbst ein Trennungs-Ereignis
+// auslöst (das passiert nicht zuverlässig bei jeder Art von Verbindungsverlust).
+setInterval(() => {
+  if (!shouldAutoReconnect || !device) return;
+  if (lastPacketTimestamp === null) return; // noch nie Daten erhalten, nichts zu prüfen
+  const silentFor = Date.now() - lastPacketTimestamp;
+  if (silentFor > 45000) {
+    console.warn('Wachhund: seit ' + Math.round(silentFor/1000) + 's keine Pakete mehr - erzwinge Reconnect');
+    setStatus('connecting', 'Keine Daten seit ' + Math.round(silentFor/1000) + 's - erzwinge Neuverbindung…');
+    lastPacketTimestamp = Date.now(); // verhindert mehrfaches Auslösen während des Reconnects
+    if (device.gatt.connected) {
+      device.gatt.disconnect(); // löst onDisconnected aus, das den Auto-Reconnect übernimmt
+    } else {
+      onDisconnected();
+    }
+  }
+}, 30000);
 
 function setStatus(state, text) {
   dot.className = 'dot ' + state;
@@ -319,6 +334,7 @@ function stripPacketHeader(bytes) {
 }
 
 function handleNotification(event) {
+  lastPacketTimestamp = Date.now();
   packetCount++;
   const value = event.target.value;
   const rawBytes = new Uint8Array(value.buffer);
@@ -407,11 +423,6 @@ function handleNotification(event) {
   const fanSection = (jsonStr.match(/"fan":\{(.*)/) || [])[1] || null;
   const fanOnVal = extractIntFromSection(fanSection, 'on', ',"level"');
   const fanLevelVal = extractIntFromSection(fanSection, 'level', '\\}');
-  // Oszillationsstufe: bisher in keiner beobachteten Nachricht gesehen,
-  // Versuch verschiedener möglicher Feldnamen falls doch vorhanden
-  const fanOscVal = extractIntFromSection(fanSection, 'osc', '(?:\\}|,)')
-    ?? extractIntFromSection(fanSection, 'oscillation', '(?:\\}|,)')
-    ?? extractIntFromSection(fanSection, 'swing', '(?:\\}|,)');
 
   const o4Section = (jsonStr.match(/"O4":\{(.*?)\},"O5"/) || [])[1] || null;
   const co2SocketOnVal = extractIntFromSection(o4Section, 'on', '(?:\\}|$)');
@@ -425,7 +436,7 @@ function handleNotification(event) {
     }, extra: {
       lightLevel: lightLevelVal, lightMode: lightModeVal,
       blowerOn: blowerOnVal, blowerLevel: blowerLevelVal,
-      fanOn: fanOnVal, fanLevel: fanLevelVal, fanOsc: fanOscVal,
+      fanOn: fanOnVal, fanLevel: fanLevelVal,
       co2SocketOn: co2SocketOnVal
     }});
     return;
@@ -470,7 +481,6 @@ function processPayload(parsed) {
   const blowerLevel = extra.blowerLevel ?? last.blowerLevel ?? null;
   const fanOn = extra.fanOn ?? last.fanOn ?? null;
   const fanLevel = extra.fanLevel ?? last.fanLevel ?? null;
-  const fanOsc = extra.fanOsc ?? last.fanOsc ?? null;
   const co2SocketOn = extra.co2SocketOn ?? last.co2SocketOn ?? null;
 
   if (co2 !== null) document.getElementById('valCo2').textContent = co2 + ' ppm';
@@ -483,11 +493,9 @@ function processPayload(parsed) {
   if (lightLevel !== null) document.getElementById('valLightLevel').textContent = lightLevel + ' %';
   if (blowerLevel !== null) document.getElementById('valBlowerLevel').textContent = blowerLevel + ' %';
   if (co2SocketOn !== null) document.getElementById('valCo2Socket').textContent = co2SocketOn;
-  if (fanLevel !== null) document.getElementById('valFanLevel').textContent = fanLevel + ' /10';
-  if (fanOsc !== null) document.getElementById('valFanOsc').textContent = fanOsc + ' /10';
 
   if (co2 !== null || humi !== null) {
-    dataLog.push({ t: Date.now(), co2, humi, temp, vpd, ppfd, tempSoil, humiSoil, lightLevel, blowerOn, blowerLevel, fanOn, fanLevel, fanOsc, co2SocketOn });
+    dataLog.push({ t: Date.now(), co2, humi, temp, vpd, ppfd, tempSoil, humiSoil, lightLevel, blowerOn, blowerLevel, fanOn, fanLevel, co2SocketOn });
     updateLogCountDisplay();
     updateChart();
     saveToLocalStorage();
@@ -563,14 +571,9 @@ function updateChart() {
   chart4.update('none');
 
   chart5.data.labels = chart.data.labels;
-  chart5.data.datasets[0].data = recent.map(p => p.blowerOn);
+  chart5.data.datasets[0].data = recent.map(p => p.blowerLevel);
   chart5.data.datasets[1].data = recent.map(p => p.co2SocketOn);
   chart5.update('none');
-
-  chart6.data.labels = chart.data.labels;
-  chart6.data.datasets[0].data = recent.map(p => p.fanOn);
-  chart6.data.datasets[1].data = recent.map(p => p.fanLevel);
-  chart6.update('none');
 }
 
 // Chart 2: Temp & VPD
@@ -638,22 +641,22 @@ const chart4 = new Chart(ctx4, {
     animation: false,
     scales: {
       x: { ticks: { color: '#8b949e', maxTicksLimit: 6 }, grid: { color: '#21262d' } },
-      y: { position: 'left', ticks: { color: '#f2cc60' }, grid: { color: '#21262d' } },
-      y1: { position: 'right', ticks: { color: '#e3b341' }, grid: { display: false } }
+      y: { position: 'left', min: 0, ticks: { color: '#f2cc60' }, grid: { color: '#21262d' } },
+      y1: { position: 'right', min: 0, max: 100, ticks: { color: '#e3b341' }, grid: { display: false } }
     },
     plugins: { legend: { labels: { color: '#e6edf3' } } }
   }
 });
 
-// Chart 5: Lüfter-Status & CO2-Steckdose (0/1 = Aus/An)
+// Chart 5: Inline-Lüfter (%) & CO2-Steckdose (0/1)
 const ctx5 = document.getElementById('chart5').getContext('2d');
 const chart5 = new Chart(ctx5, {
   type: 'line',
   data: {
     labels: [],
     datasets: [
-      { label: 'Inline-Lüfter (0/1)', data: [], borderColor: '#a5a5f0', backgroundColor: 'transparent', yAxisID: 'y', tension: 0, spanGaps: true, stepped: true },
-      { label: 'CO2-Steckdose (0/1)', data: [], borderColor: '#d2a8ff', backgroundColor: 'transparent', yAxisID: 'y', tension: 0, spanGaps: true, stepped: true }
+      { label: 'Inline-Lüfter (%)', data: [], borderColor: '#a5a5f0', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2, spanGaps: true },
+      { label: 'CO2-Steckdose (0/1)', data: [], borderColor: '#d2a8ff', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0, spanGaps: true, stepped: true }
     ]
   },
   options: {
@@ -662,31 +665,8 @@ const chart5 = new Chart(ctx5, {
     animation: false,
     scales: {
       x: { ticks: { color: '#8b949e', maxTicksLimit: 6 }, grid: { color: '#21262d' } },
-      y: { position: 'left', min: -0.1, max: 1.1, ticks: { color: '#a5a5f0', stepSize: 1 }, grid: { color: '#21262d' } }
-    },
-    plugins: { legend: { labels: { color: '#e6edf3' } } }
-  }
-});
-
-// Chart 6: Umluft-Fan (An/Aus + Gang) - alles zum Clip-Fan / Injektions-Fan
-const ctx6 = document.getElementById('chart6').getContext('2d');
-const chart6 = new Chart(ctx6, {
-  type: 'line',
-  data: {
-    labels: [],
-    datasets: [
-      { label: 'Umluft-Fan An (0/1)', data: [], borderColor: '#39c5cf', backgroundColor: 'transparent', yAxisID: 'y', tension: 0, spanGaps: true, stepped: true },
-      { label: 'Umluft-Fan-Gang', data: [], borderColor: '#f778ba', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2, spanGaps: true }
-    ]
-  },
-  options: {
-    responsive: true,
-    maintainAspectRatio: false,
-    animation: false,
-    scales: {
-      x: { ticks: { color: '#8b949e', maxTicksLimit: 6 }, grid: { color: '#21262d' } },
-      y: { position: 'left', min: -0.1, max: 1.1, ticks: { color: '#39c5cf', stepSize: 1 }, grid: { color: '#21262d' } },
-      y1: { position: 'right', min: 0, max: 10, ticks: { color: '#f778ba' }, grid: { display: false } }
+      y: { position: 'left', min: 0, max: 100, ticks: { color: '#a5a5f0' }, grid: { color: '#21262d' } },
+      y1: { position: 'right', min: -0.1, max: 1.1, ticks: { color: '#d2a8ff', stepSize: 1 }, grid: { display: false } }
     },
     plugins: { legend: { labels: { color: '#e6edf3' } } }
   }

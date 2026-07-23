@@ -14,6 +14,9 @@
     color: #e6edf3;
     min-height: 100vh;
     padding: 16px;
+    max-width: 900px;
+    margin-left: auto;
+    margin-right: auto;
   }
   h1 {
     font-size: 1.3rem;
@@ -79,7 +82,19 @@
   .metric.temp .value { color: #ffa657; }
   .metric.vpd .value { color: #7ee787; }
   .log-count { font-size: 0.8rem; color: #8b949e; margin-top: 10px; }
-  canvas { max-height: 220px; }
+  .chart-container {
+    position: relative;
+    width: 100%;
+    height: 45vh;
+    min-height: 220px;
+    max-height: 500px;
+  }
+  @media (min-width: 700px) {
+    .chart-container { height: 400px; }
+  }
+  @media (orientation: landscape) and (max-width: 1000px) {
+    .chart-container { height: 60vh; }
+  }
   .raw {
     font-family: monospace;
     font-size: 0.7rem;
@@ -106,10 +121,10 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger</h1>
-<div class="sub">Sekundengenaues CO2/Klima-Log für HennoX Amethyst — experimentell, basiert auf Reverse-Engineering von cr0ssn0tice</div>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.11</span></h1>
+<div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
-<div class="warn">⚠️ Experimentell: Protokoll ist community-reverse-engineered, nicht offiziell. Falls "CO2 Anlage" oder ähnliche Felder im Rohdatenfeld unten nicht auftauchen, sag mir den genauen Text — dann pass ich den Parser an.</div>
+
 
 <div class="card">
   <div class="status-row">
@@ -125,16 +140,20 @@
     <div class="metric temp"><div class="label">Temp</div><div class="value" id="valTemp">—</div></div>
     <div class="metric vpd"><div class="label">VPD</div><div class="value" id="valVpd">—</div></div>
   </div>
+  <div class="grid" style="margin-top:10px;grid-template-columns:1fr 1fr;">
+    <div class="metric"><div class="label">Boden-Temp</div><div class="value" style="color:#ff7b72;" id="valTempSoil">—</div></div>
+    <div class="metric"><div class="label">Boden-Feuchte</div><div class="value" style="color:#56d4dd;" id="valHumiSoil">—</div></div>
+  </div>
 
   <div class="log-count" id="logCount">0 Messpunkte aufgezeichnet</div>
 </div>
 
 <div class="card">
-  <canvas id="chart"></canvas>
+  <div class="chart-container"><canvas id="chart"></canvas></div>
 </div>
 
 <div class="card">
-  <canvas id="chart2"></canvas>
+  <div class="chart-container"><canvas id="chart2"></canvas></div>
 </div>
 
 <div class="card">
@@ -143,18 +162,40 @@
   <button id="clearBtn" class="danger" style="margin-top:8px;">Log leeren</button>
 </div>
 
-<div class="card">
-  <div class="label" style="font-size:0.75rem;color:#8b949e;margin-bottom:6px;">Letztes Rohsignal (Debug)</div>
-  <div class="raw" id="rawOut">–</div>
-</div>
+<div id="rawOut" style="display:none;"></div>
 
 <script>
 const SERVICE_UUID = 0x00ff; // bestätigt via chrome://bluetooth-internals
 const NOTIFY_UUID = 0xff01;  // bestätigt: Notify-Property vorhanden
 
 let device, server, notifyChar;
-let dataLog = []; // {t: timestamp, co2, humi, temp, vpd}
+let dataLog = [];
 let byteBuffer = [];
+let wakeLock = null;
+let shouldAutoReconnect = false;
+
+function saveToLocalStorage() {
+  try {
+    // Nur die letzten 500 Punkte speichern, um localStorage nicht zu sprengen
+    const toSave = dataLog.slice(-500);
+    localStorage.setItem('ggs_datalog', JSON.stringify(toSave));
+  } catch (e) {
+    console.warn('localStorage speichern fehlgeschlagen', e);
+  }
+}
+
+function loadFromLocalStorage() {
+  try {
+    const saved = localStorage.getItem('ggs_datalog');
+    if (saved) {
+      dataLog = JSON.parse(saved);
+      updateLogCountDisplay();
+      updateChart();
+    }
+  } catch (e) {
+    console.warn('localStorage laden fehlgeschlagen', e);
+  }
+}
 
 const dot = document.getElementById('dot');
 const statusText = document.getElementById('statusText');
@@ -186,6 +227,14 @@ connectBtn.addEventListener('click', async () => {
     connectBtn.style.display = 'none';
     disconnectBtn.style.display = 'block';
     rawOut.textContent = 'Verbunden. Warte auf erstes Datenpaket vom Controller...';
+    shouldAutoReconnect = true;
+
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => console.log('Wake Lock freigegeben'));
+    } catch (wlErr) {
+      console.warn('Wake Lock nicht verfügbar:', wlErr.message);
+    }
   } catch (err) {
     setStatus('', 'Fehler: ' + err.message);
     console.error(err);
@@ -193,14 +242,44 @@ connectBtn.addEventListener('click', async () => {
 });
 
 disconnectBtn.addEventListener('click', () => {
+  shouldAutoReconnect = false;
+  if (wakeLock) { wakeLock.release(); wakeLock = null; }
   if (device && device.gatt.connected) device.gatt.disconnect();
 });
 
-function onDisconnected() {
-  setStatus('', 'Getrennt');
+async function onDisconnected() {
+  setStatus('', shouldAutoReconnect ? 'Getrennt - versuche erneut zu verbinden…' : 'Getrennt');
   connectBtn.style.display = 'block';
   disconnectBtn.style.display = 'none';
+
+  if (shouldAutoReconnect && device) {
+    // Automatischer Wiederverbindungsversuch nach kurzer Pause
+    await new Promise(r => setTimeout(r, 2000));
+    try {
+      setStatus('connecting', 'Verbinde erneut…');
+      server = await device.gatt.connect();
+      const service = await server.getPrimaryService(SERVICE_UUID);
+      notifyChar = await service.getCharacteristic(NOTIFY_UUID);
+      await notifyChar.startNotifications();
+      notifyChar.addEventListener('characteristicvaluechanged', handleNotification);
+      setStatus('connected', 'Wiederverbunden: ' + device.name);
+      connectBtn.style.display = 'none';
+      disconnectBtn.style.display = 'block';
+    } catch (reErr) {
+      setStatus('', 'Wiederverbinden fehlgeschlagen: ' + reErr.message);
+      console.error(reErr);
+    }
+  }
 }
+
+// Wake Lock nach Bildschirm-Reaktivierung erneut anfordern (Browser gibt ihn bei Tab-Wechsel frei)
+document.addEventListener('visibilitychange', async () => {
+  if (wakeLock === null && shouldAutoReconnect && document.visibilityState === 'visible') {
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+    } catch (e) { /* still fine, best effort */ }
+  }
+});
 
 let packetCount = 0;
 let packetHistory = [];
@@ -298,17 +377,44 @@ function processPayload(parsed) {
   const humi = sensor.humi ?? sensor.humidity ?? null;
   const temp = sensor.temp ?? sensor.temperature ?? null;
   const vpd = sensor.vpd ?? null;
+  const tempSoil = sensor.tempSoil ?? null;
+  const humiSoil = sensor.humiSoil ?? null;
 
   if (co2 !== null) document.getElementById('valCo2').textContent = co2 + ' ppm';
   if (humi !== null) document.getElementById('valHumi').textContent = humi + ' %';
   if (temp !== null) document.getElementById('valTemp').textContent = temp + ' °C';
   if (vpd !== null) document.getElementById('valVpd').textContent = vpd + ' kPa';
+  if (tempSoil !== null) document.getElementById('valTempSoil').textContent = tempSoil + ' °C';
+  if (humiSoil !== null) document.getElementById('valHumiSoil').textContent = humiSoil + ' %';
 
   if (co2 !== null || humi !== null) {
-    dataLog.push({ t: Date.now(), co2, humi, temp, vpd });
-    logCount.textContent = dataLog.length + ' Messpunkte aufgezeichnet';
+    dataLog.push({ t: Date.now(), co2, humi, temp, vpd, tempSoil, humiSoil });
+    updateLogCountDisplay();
     updateChart();
+    saveToLocalStorage();
   }
+}
+
+function formatDuration(ms) {
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}min`;
+  if (m > 0) return `${m}min ${s}s`;
+  return `${s}s`;
+}
+
+function updateLogCountDisplay() {
+  if (dataLog.length === 0) {
+    logCount.textContent = '0 Messpunkte aufgezeichnet';
+    return;
+  }
+  const first = dataLog[0].t;
+  const last = dataLog[dataLog.length - 1].t;
+  const duration = formatDuration(last - first);
+  const lastTime = new Date(last).toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+  logCount.textContent = dataLog.length + ' Messpunkte · Zeitraum: ' + duration + ' · zuletzt: ' + lastTime;
 }
 
 // Chart Setup
@@ -324,6 +430,7 @@ const chart = new Chart(ctx, {
   },
   options: {
     responsive: true,
+    maintainAspectRatio: false,
     animation: false,
     scales: {
       x: { ticks: { color: '#8b949e', maxTicksLimit: 6 }, grid: { color: '#21262d' } },
@@ -360,6 +467,7 @@ const chart2 = new Chart(ctx2, {
   },
   options: {
     responsive: true,
+    maintainAspectRatio: false,
     animation: false,
     scales: {
       x: { ticks: { color: '#8b949e', maxTicksLimit: 6 }, grid: { color: '#21262d' } },
@@ -371,9 +479,9 @@ const chart2 = new Chart(ctx2, {
 });
 
 document.getElementById('exportBtn').addEventListener('click', () => {
-  let csv = 'Zeitstempel;CO2_ppm;Feuchte_%;Temp_C;VPD_kPa\n';
+  let csv = 'Zeitstempel;CO2_ppm;Feuchte_%;Temp_C;VPD_kPa;Boden_Temp_C;Boden_Feuchte_%\n';
   dataLog.forEach(p => {
-    csv += new Date(p.t).toISOString() + ';' + (p.co2 ?? '') + ';' + (p.humi ?? '') + ';' + (p.temp ?? '') + ';' + (p.vpd ?? '') + '\n';
+    csv += new Date(p.t).toISOString() + ';' + (p.co2 ?? '') + ';' + (p.humi ?? '') + ';' + (p.temp ?? '') + ';' + (p.vpd ?? '') + ';' + (p.tempSoil ?? '') + ';' + (p.humiSoil ?? '') + '\n';
   });
   const blob = new Blob([csv], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
@@ -401,7 +509,8 @@ document.getElementById('exportDebugBtn').addEventListener('click', () => {
 document.getElementById('clearBtn').addEventListener('click', () => {
   dataLog = [];
   debugLog = [];
-  logCount.textContent = '0 Messpunkte aufgezeichnet';
+  localStorage.removeItem('ggs_datalog');
+  updateLogCountDisplay();
   updateChart();
 });
 
@@ -409,6 +518,8 @@ if (!navigator.bluetooth) {
   setStatus('', 'Web Bluetooth nicht verfügbar — nutze Chrome auf Android');
   connectBtn.disabled = true;
 }
+
+loadFromLocalStorage();
 </script>
 </body>
 </html>

@@ -121,7 +121,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.15</span></h1>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.16</span></h1>
 <div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
 
@@ -341,23 +341,28 @@ function handleNotification(event) {
   // Plausibilitätsprüfung. So wird nur das konkret beschädigte Feld verworfen,
   // nicht die ganze Nachricht - und korrupte Zahlen (falsche Werte durch
   // Byte-Fehler) werden erkannt statt unbemerkt übernommen.
-  function extractField(name, min, max, requireDecimal) {
-    const pattern = requireDecimal
-      ? '"' + name + '":(-?[0-9]+\\.[0-9]+)'   // MUSS Dezimalstelle haben (Gerät sendet nie nackte Ganzzahl)
-      : '"' + name + '":(-?[0-9]+\\.?[0-9]*)';
-    const m = jsonStr.match(new RegExp(pattern));
+  // Extrahiert ein Feld anhand des bekannten NÄCHSTEN Feldnamens als Grenze,
+  // entfernt darin ALLE Störzeichen (nicht nur bis zum ersten) und setzt die
+  // übrig gebliebenen Ziffern zusammen - robust gegen einzelne eingeschleuste
+  // Störbytes mitten in der Zahl (z.B. Anführungszeichen), da die echten Ziffern
+  // in der richtigen Reihenfolge erhalten bleiben.
+  function extractFieldBounded(name, nextKey, min, max, requireDecimal) {
+    const m = jsonStr.match(new RegExp('"' + name + '":(.*?),"' + nextKey + '"'));
     if (!m) return null;
-    const val = parseFloat(m[1]);
+    const cleaned = m[1].replace(/[^0-9.\-]/g, '');
+    const pattern = requireDecimal ? /^-?[0-9]{1,3}\.[0-9]{1,2}$/ : /^-?[0-9]{1,4}$/;
+    if (!pattern.test(cleaned)) return null;
+    const val = parseFloat(cleaned);
     if (isNaN(val) || val < min || val > max) return null;
     return val;
   }
 
-  const co2Val = extractField('co2', 0, 5000, false);
-  const humiVal = extractField('humi', 0, 100, true);
-  const tempVal = extractField('temp', -10, 60, true);
-  const vpdVal = extractField('vpd', 0, 10, true);
-  const tempSoilVal = extractField('tempSoil', -10, 60, false);
-  const humiSoilVal = extractField('humiSoil', 0, 100, false);
+  const co2Val = extractFieldBounded('co2', 'tempSoil', 0, 5000, false);
+  const humiVal = extractFieldBounded('humi', 'vpd', 0, 100, true);
+  const tempVal = extractFieldBounded('temp', 'humi', -10, 60, true);
+  const vpdVal = extractFieldBounded('vpd', 'ppfd', 0, 10, true);
+  const tempSoilVal = extractFieldBounded('tempSoil', 'humiSoil', -10, 60, false);
+  const humiSoilVal = extractFieldBounded('humiSoil', 'ECSoil', 0, 100, true);
 
   if (jsonStr.includes('"sensor"') && (co2Val !== null || humiVal !== null || tempVal !== null)) {
     rawOut.textContent = 'Sensorwerte extrahiert: temp=' + tempVal + ' humi=' + humiVal + ' co2=' + co2Val + ' vpd=' + vpdVal;

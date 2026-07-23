@@ -121,7 +121,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.20</span></h1>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.21</span></h1>
 <div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
 
@@ -389,7 +389,7 @@ function handleNotification(event) {
   function extractIntFromSection(sectionText, key, terminator) {
     if (!sectionText) return null;
     const m = sectionText.match(new RegExp('"' + key + '":(.*?)' + terminator));
-    if (!m) return null;
+    if (!m || m[1] === undefined) return null;
     const cleaned = m[1].replace(/[^0-9\-]/g, '');
     if (!/^-?[0-9]{1,5}$/.test(cleaned)) return null;
     const val = parseInt(cleaned, 10);
@@ -397,24 +397,24 @@ function handleNotification(event) {
   }
 
   const lightSection = (jsonStr.match(/"light":\{(.*?)\},"light2"/) || [])[1] || null;
-  const lightLevelVal = extractIntFromSection(lightSection, 'level', '\\}|$');
+  const lightLevelVal = extractIntFromSection(lightSection, 'level', '(?:\\}|$)');
   const lightModeVal = extractIntFromSection(lightSection, 'modeType', ',"level"');
 
   const blowerSection = (jsonStr.match(/"blower":\{(.*?)\},"fan"/) || [])[1] || null;
   const blowerOnVal = extractIntFromSection(blowerSection, 'on', ',"level"');
-  const blowerLevelVal = extractIntFromSection(blowerSection, 'level', '\\}|$');
+  const blowerLevelVal = extractIntFromSection(blowerSection, 'level', '(?:\\}|$)');
 
   const fanSection = (jsonStr.match(/"fan":\{(.*)/) || [])[1] || null;
   const fanOnVal = extractIntFromSection(fanSection, 'on', ',"level"');
   const fanLevelVal = extractIntFromSection(fanSection, 'level', '\\}');
   // Oszillationsstufe: bisher in keiner beobachteten Nachricht gesehen,
   // Versuch verschiedener möglicher Feldnamen falls doch vorhanden
-  const fanOscVal = extractIntFromSection(fanSection, 'osc', '\\}|,')
-    ?? extractIntFromSection(fanSection, 'oscillation', '\\}|,')
-    ?? extractIntFromSection(fanSection, 'swing', '\\}|,');
+  const fanOscVal = extractIntFromSection(fanSection, 'osc', '(?:\\}|,)')
+    ?? extractIntFromSection(fanSection, 'oscillation', '(?:\\}|,)')
+    ?? extractIntFromSection(fanSection, 'swing', '(?:\\}|,)');
 
   const o4Section = (jsonStr.match(/"O4":\{(.*?)\},"O5"/) || [])[1] || null;
-  const co2SocketOnVal = extractIntFromSection(o4Section, 'on', '\\}|$');
+  const co2SocketOnVal = extractIntFromSection(o4Section, 'on', '(?:\\}|$)');
 
   if (jsonStr.includes('"sensor"') && (co2Val !== null || humiVal !== null || tempVal !== null)) {
     rawOut.textContent = 'Sensorwerte extrahiert: temp=' + tempVal + ' humi=' + humiVal + ' co2=' + co2Val + ' vpd=' + vpdVal;

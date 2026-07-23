@@ -180,6 +180,7 @@ connectBtn.addEventListener('click', async () => {
     setStatus('connected', 'Verbunden: ' + device.name);
     connectBtn.style.display = 'none';
     disconnectBtn.style.display = 'block';
+    rawOut.textContent = 'Verbunden. Warte auf erstes Datenpaket vom Controller...';
   } catch (err) {
     setStatus('', 'Fehler: ' + err.message);
     console.error(err);
@@ -196,10 +197,18 @@ function onDisconnected() {
   disconnectBtn.style.display = 'none';
 }
 
+let packetCount = 0;
+
 function handleNotification(event) {
+  packetCount++;
   const value = event.target.value;
   const bytes = new Uint8Array(value.buffer);
   for (const b of bytes) byteBuffer.push(b);
+
+  // Sofortige Debug-Anzeige, unabhängig vom Parse-Erfolg
+  const hex = Array.from(bytes).map(b => b.toString(16).padStart(2,'0')).join(' ');
+  const asText = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+  rawOut.textContent = `Paket #${packetCount} (${bytes.length} Bytes)\nHex: ${hex}\nText: ${asText}\n---\nPuffer gesamt: ${byteBuffer.length} Bytes`;
 
   // Versuche, vollständiges JSON zu extrahieren (endet auf "}}")
   const text = new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(byteBuffer));
@@ -207,24 +216,23 @@ function handleNotification(event) {
   if (firstBrace === -1) return;
   const candidate = text.slice(firstBrace);
 
-  // Zähle Klammerbalance um zu sehen ob vollständig
   let depth = 0, endIdx = -1;
   for (let i = 0; i < candidate.length; i++) {
     if (candidate[i] === '{') depth++;
     if (candidate[i] === '}') { depth--; if (depth === 0) { endIdx = i; break; } }
   }
-  if (endIdx === -1) return; // noch nicht vollständig, weiter puffern
+  if (endIdx === -1) return;
 
   const jsonStr = candidate.slice(0, endIdx + 1);
-  byteBuffer = []; // Puffer zurücksetzen
+  byteBuffer = [];
 
-  rawOut.textContent = jsonStr;
+  rawOut.textContent = 'JSON erkannt:\n' + jsonStr;
 
   try {
     const parsed = JSON.parse(jsonStr);
     processPayload(parsed);
   } catch (e) {
-    // Kein valides JSON, verwerfen
+    rawOut.textContent += '\n\nPARSE-FEHLER: ' + e.message;
     console.warn('JSON parse failed', e, jsonStr);
   }
 }

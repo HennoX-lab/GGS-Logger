@@ -121,7 +121,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.29</span></h1>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.30</span></h1>
 <div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
 
@@ -336,7 +336,21 @@ async function tryAutoReconnectAfterReload() {
       setStatus('', 'Kein bekanntes Gerät gefunden - bitte manuell verbinden');
       return;
     }
-    await establishConnection(match);
+    // Direkt nach einem Reload kann der Bluetooth-Stack kurz brauchen, bis er
+    // das Gerät wieder erkennt ("not in range" trotz Nähe) - daher mehrere
+    // Versuche mit kurzer Pause, bevor aufgegeben wird.
+    let lastErr = null;
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        await establishConnection(match);
+        return; // Erfolg
+      } catch (err) {
+        lastErr = err;
+        setStatus('connecting', 'Verbindungsversuch ' + attempt + '/5 fehlgeschlagen, erneut…');
+        await new Promise(r => setTimeout(r, 3000));
+      }
+    }
+    setStatus('', 'Automatische Neuverbindung fehlgeschlagen nach 5 Versuchen: ' + lastErr.message);
   } catch (err) {
     setStatus('', 'Automatische Neuverbindung fehlgeschlagen: ' + err.message);
     console.error(err);
@@ -588,6 +602,16 @@ function updateLogCountDisplay() {
 }
 
 // Chart Setup
+const timeAxisConfig = {
+  type: 'linear',
+  ticks: {
+    color: '#8b949e',
+    maxTicksLimit: 6,
+    callback: (v) => new Date(v).toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit', second:'2-digit'})
+  },
+  grid: { color: '#21262d' }
+};
+
 const ctx = document.getElementById('chart').getContext('2d');
 const chart = new Chart(ctx, {
   type: 'line',
@@ -603,7 +627,7 @@ const chart = new Chart(ctx, {
     maintainAspectRatio: false,
     animation: false,
     scales: {
-      x: { ticks: { color: '#8b949e', maxTicksLimit: 6 }, grid: { color: '#21262d' } },
+      x: timeAxisConfig,
       y: { position: 'left', ticks: { color: '#d2a8ff' }, grid: { color: '#21262d' } },
       y1: { position: 'right', ticks: { color: '#79c0ff' }, grid: { display: false } }
     },
@@ -626,32 +650,28 @@ function updateChart() {
     recent.push(rawRecent[i]);
   }
 
-  const labels = recent.map(p => p.isGap ? '⋯ Lücke ⋯' : new Date(p.t).toLocaleTimeString('de-DE', {hour:'2-digit',minute:'2-digit',second:'2-digit'}));
-  const val = (p, key) => p.isGap ? null : p[key];
+  // Echte Zeitachse: x = tatsächlicher Zeitstempel (ms), nicht nur Reihenfolge -
+  // der Abstand zwischen Punkten spiegelt jetzt die real vergangene Zeit wider.
+  const pt = (p, key) => ({ x: p.t, y: p.isGap ? null : p[key] });
 
-  chart.data.labels = labels;
-  chart.data.datasets[0].data = recent.map(p => val(p, 'co2'));
-  chart.data.datasets[1].data = recent.map(p => val(p, 'humi'));
+  chart.data.datasets[0].data = recent.map(p => pt(p, 'co2'));
+  chart.data.datasets[1].data = recent.map(p => pt(p, 'humi'));
   chart.update('none');
 
-  chart2.data.labels = labels;
-  chart2.data.datasets[0].data = recent.map(p => val(p, 'temp'));
-  chart2.data.datasets[1].data = recent.map(p => val(p, 'vpd'));
+  chart2.data.datasets[0].data = recent.map(p => pt(p, 'temp'));
+  chart2.data.datasets[1].data = recent.map(p => pt(p, 'vpd'));
   chart2.update('none');
 
-  chart3.data.labels = labels;
-  chart3.data.datasets[0].data = recent.map(p => val(p, 'tempSoil'));
-  chart3.data.datasets[1].data = recent.map(p => val(p, 'humiSoil'));
+  chart3.data.datasets[0].data = recent.map(p => pt(p, 'tempSoil'));
+  chart3.data.datasets[1].data = recent.map(p => pt(p, 'humiSoil'));
   chart3.update('none');
 
-  chart4.data.labels = labels;
-  chart4.data.datasets[0].data = recent.map(p => val(p, 'ppfd'));
-  chart4.data.datasets[1].data = recent.map(p => val(p, 'lightLevel'));
+  chart4.data.datasets[0].data = recent.map(p => pt(p, 'ppfd'));
+  chart4.data.datasets[1].data = recent.map(p => pt(p, 'lightLevel'));
   chart4.update('none');
 
-  chart5.data.labels = labels;
-  chart5.data.datasets[0].data = recent.map(p => val(p, 'blowerLevel'));
-  chart5.data.datasets[1].data = recent.map(p => val(p, 'co2SocketOn'));
+  chart5.data.datasets[0].data = recent.map(p => pt(p, 'blowerLevel'));
+  chart5.data.datasets[1].data = recent.map(p => pt(p, 'co2SocketOn'));
   chart5.update('none');
 }
 
@@ -671,7 +691,7 @@ const chart2 = new Chart(ctx2, {
     maintainAspectRatio: false,
     animation: false,
     scales: {
-      x: { ticks: { color: '#8b949e', maxTicksLimit: 6 }, grid: { color: '#21262d' } },
+      x: timeAxisConfig,
       y: { position: 'left', ticks: { color: '#ffa657' }, grid: { color: '#21262d' } },
       y1: { position: 'right', ticks: { color: '#7ee787' }, grid: { display: false } }
     },
@@ -695,7 +715,7 @@ const chart3 = new Chart(ctx3, {
     maintainAspectRatio: false,
     animation: false,
     scales: {
-      x: { ticks: { color: '#8b949e', maxTicksLimit: 6 }, grid: { color: '#21262d' } },
+      x: timeAxisConfig,
       y: { position: 'left', ticks: { color: '#ff7b72' }, grid: { color: '#21262d' } },
       y1: { position: 'right', ticks: { color: '#56d4dd' }, grid: { display: false } }
     },
@@ -719,7 +739,7 @@ const chart4 = new Chart(ctx4, {
     maintainAspectRatio: false,
     animation: false,
     scales: {
-      x: { ticks: { color: '#8b949e', maxTicksLimit: 6 }, grid: { color: '#21262d' } },
+      x: timeAxisConfig,
       y: { position: 'left', min: 0, ticks: { color: '#f2cc60' }, grid: { color: '#21262d' } },
       y1: { position: 'right', min: 0, max: 100, ticks: { color: '#e3b341' }, grid: { display: false } }
     },
@@ -743,7 +763,7 @@ const chart5 = new Chart(ctx5, {
     maintainAspectRatio: false,
     animation: false,
     scales: {
-      x: { ticks: { color: '#8b949e', maxTicksLimit: 6 }, grid: { color: '#21262d' } },
+      x: timeAxisConfig,
       y: { position: 'left', min: 0, max: 100, ticks: { color: '#a5a5f0' }, grid: { color: '#21262d' } },
       y1: { position: 'right', min: 0, max: 1, ticks: { color: '#d2a8ff', stepSize: 1 }, grid: { display: false } }
     },

@@ -14,7 +14,7 @@
     color: #e6edf3;
     min-height: 100vh;
     padding: 16px;
-    max-width: 1800px;
+    max-width: 2600px;
     margin-left: auto;
     margin-right: auto;
   }
@@ -77,10 +77,6 @@
   }
   .metric .label { font-size: 0.7rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; }
   .metric .value { font-size: 1.6rem; font-weight: 700; margin-top: 2px; }
-  .metric.co2 .value { color: #d2a8ff; }
-  .metric.humi .value { color: #79c0ff; }
-  .metric.temp .value { color: #ffa657; }
-  .metric.vpd .value { color: #7ee787; }
   .log-count { font-size: 0.8rem; color: #8b949e; margin-top: 10px; }
   .chart-container {
     position: relative;
@@ -96,7 +92,7 @@
     .chart-container { height: 60vh; }
   }
   @media (min-width: 1400px) {
-    .grid { grid-template-columns: repeat(4, 1fr) !important; }
+    .grid { grid-template-columns: repeat(5, 1fr) !important; }
   }
   .raw {
     font-family: monospace;
@@ -124,7 +120,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.41</span></h1>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.43</span></h1>
 <div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
 
@@ -136,22 +132,17 @@
   </div>
   <button id="connectBtn">Mit GGS Controller verbinden</button>
   <button id="disconnectBtn" class="secondary" style="display:none;">Trennen</button>
-  <button id="forceReconnectBtn" class="secondary" style="display:none;">Jetzt neu verbinden (falls eingefroren)</button>
 
   <div class="grid">
-    <div class="metric co2"><div class="label">CO2</div><div class="value" id="valCo2">—</div></div>
-    <div class="metric humi"><div class="label">Feuchte</div><div class="value" id="valHumi">—</div></div>
-    <div class="metric temp"><div class="label">Temp</div><div class="value" id="valTemp">—</div></div>
-    <div class="metric vpd"><div class="label">VPD</div><div class="value" id="valVpd">—</div></div>
-  </div>
-  <div class="grid" style="margin-top:10px;">
-    <div class="metric"><div class="label">Boden-Temp</div><div class="value" style="color:#ff7b72;" id="valTempSoil">—</div></div>
-    <div class="metric"><div class="label">Boden-Feuchte</div><div class="value" style="color:#56d4dd;" id="valHumiSoil">—</div></div>
-  </div>
-  <div class="grid" style="margin-top:10px;">
-    <div class="metric"><div class="label">PPFD</div><div class="value" style="color:#f2cc60;" id="valPpfd">—</div></div>
-    <div class="metric"><div class="label">Licht-Stufe</div><div class="value" style="color:#e3b341;" id="valLightLevel">—</div></div>
-    <div class="metric"><div class="label">Inline-Lüfter</div><div class="value" style="color:#a5a5f0;" id="valBlowerLevel">—</div></div>
+    <div class="metric"><div class="label">CO2</div><div class="value" style="color:#d4c5a9;" id="valCo2">—</div></div>
+    <div class="metric"><div class="label">Feuchte</div><div class="value" style="color:#39c5cf;" id="valHumi">—</div></div>
+    <div class="metric"><div class="label">Temp</div><div class="value" style="color:#f85149;" id="valTemp">—</div></div>
+    <div class="metric"><div class="label">VPD</div><div class="value" style="color:#3fb950;" id="valVpd">—</div></div>
+    <div class="metric"><div class="label">Boden-Temp</div><div class="value" style="color:#a1553a;" id="valTempSoil">—</div></div>
+    <div class="metric"><div class="label">Boden-Feuchte</div><div class="value" style="color:#3a5ccc;" id="valHumiSoil">—</div></div>
+    <div class="metric"><div class="label">PPFD</div><div class="value" style="color:#e3b341;" id="valPpfd">—</div></div>
+    <div class="metric"><div class="label">Licht-Stufe</div><div class="value" style="color:#f0883e;" id="valLightLevel">—</div></div>
+    <div class="metric"><div class="label">Inline-Lüfter</div><div class="value" style="color:#6e40c9;" id="valBlowerLevel">—</div></div>
     <div class="metric"><div class="label">CO2-Steckdose</div><div class="value" style="color:#d2a8ff;" id="valCo2Socket">—</div></div>
   </div>
 
@@ -309,22 +300,33 @@ async function forceReconnect(reason) {
   location.reload();
 }
 
-document.getElementById('forceReconnectBtn').addEventListener('click', () => {
-  forceReconnect('Manuell ausgelöst');
-});
-
 // Wachhund: erkennt "Zombie"-Verbindungen (Browser meldet "verbunden",
 // aber es kommen keine Pakete mehr an) und erzwingt in diesem Fall einen
 // Reconnect, unabhängig davon, ob der Browser selbst ein Trennungs-Ereignis
 // auslöst (das passiert nicht zuverlässig bei jeder Art von Verbindungsverlust).
-setInterval(() => {
+// Wachhund-Timer läuft in einem Web Worker statt im normalen Seiten-Thread:
+// Chromium-Browser drosseln setInterval/setTimeout im Haupt-Thread, wenn
+// die Seite länger keine Nutzereingabe (Maus/Tastatur) hatte - selbst wenn
+// der Tab sichtbar/aktiv ist und "Sleeping Tabs" deaktiviert wurde. Ein
+// Worker läuft in einem eigenen Thread und ist von dieser Drosselung nicht
+// betroffen, daher bleibt die Prüfung auch bei längerer Inaktivität exakt.
+const watchdogWorkerCode = `setInterval(() => postMessage('tick'), 5000);`;
+const watchdogWorkerBlob = new Blob([watchdogWorkerCode], { type: 'application/javascript' });
+const watchdogWorker = new Worker(URL.createObjectURL(watchdogWorkerBlob));
+watchdogWorker.onmessage = () => {
+  // Anzeige/Diagramme auch ohne neue Daten periodisch aktualisieren, damit
+  // das feste 10-Minuten-Zeitfenster live weiterläuft und die "jetzt"-Uhrzeit
+  // aktuell bleibt - läuft im Worker, daher nicht von Timer-Drosselung betroffen.
+  if (typeof updateChart === 'function' && dataLog.length > 0) updateChart();
+  if (typeof updateLogCountDisplay === 'function') updateLogCountDisplay();
+
   if (!shouldAutoReconnect || !device) return;
   if (lastPacketTimestamp === null) return;
   const silentFor = Date.now() - lastPacketTimestamp;
   if (silentFor > 20000) {
     forceReconnect('Keine Daten seit ' + Math.round(silentFor/1000) + 's');
   }
-}, 15000);
+};
 
 // Sobald die Seite wieder sichtbar wird (z.B. nach Tab-/App-Wechsel oder
 // Bildschirm-Entsperren), sofort prüfen statt bis zu 30s auf den Wachhund
@@ -361,7 +363,6 @@ async function establishConnection(targetDevice) {
   setStatus('connected', 'Verbunden: ' + device.name);
   connectBtn.style.display = 'none';
   disconnectBtn.style.display = 'block';
-  document.getElementById('forceReconnectBtn').style.display = 'block';
   rawOut.textContent = 'Verbunden. Warte auf erstes Datenpaket vom Controller...';
   shouldAutoReconnect = true;
   lastPacketTimestamp = Date.now();
@@ -431,7 +432,6 @@ disconnectBtn.addEventListener('click', () => {
   shouldAutoReconnect = false;
   localStorage.removeItem('ggs_autoconnect');
   if (wakeLock) { wakeLock.release(); wakeLock = null; }
-  document.getElementById('forceReconnectBtn').style.display = 'none';
   if (device && device.gatt.connected) device.gatt.disconnect();
 });
 
@@ -439,7 +439,6 @@ async function onDisconnected() {
   setStatus('', shouldAutoReconnect ? 'Getrennt - versuche erneut zu verbinden…' : 'Getrennt');
   connectBtn.style.display = 'block';
   disconnectBtn.style.display = 'none';
-  if (!shouldAutoReconnect) document.getElementById('forceReconnectBtn').style.display = 'none';
 
   if (shouldAutoReconnect && device) {
     // Automatischer Wiederverbindungsversuch nach kurzer Pause
@@ -660,18 +659,30 @@ function formatDuration(ms) {
 }
 
 function updateLogCountDisplay() {
+  const nowStr = new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
   if (dataLog.length === 0) {
-    logCount.textContent = '0 Messpunkte aufgezeichnet';
+    logCount.textContent = '0 Messpunkte aufgezeichnet · jetzt: ' + nowStr;
     return;
   }
-  const first = dataLog[0].t;
+  const now = Date.now();
+  const windowStart = now - CHART_WINDOW_MS;
+  const chartSource = dataLog.length > 1 ? dataLog.slice(1) : dataLog;
+  const visible = chartSource.filter(p => p.t >= windowStart);
+  const firstVisible = visible.length > 0 ? visible[0].t : dataLog[0].t;
+
   const last = dataLog[dataLog.length - 1].t;
-  const duration = formatDuration(last - first);
+  const duration = formatDuration(last - firstVisible);
+  const firstTime = new Date(firstVisible).toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
   const lastTime = new Date(last).toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-  logCount.textContent = dataLog.length + ' Messpunkte · Zeitraum: ' + duration + ' · zuletzt: ' + lastTime;
+  logCount.textContent = dataLog.length + ' Messpunkte · Zeitraum: ' + duration + ' · erster: ' + firstTime + ' · zuletzt: ' + lastTime + ' · jetzt: ' + nowStr;
 }
 
 // Chart Setup
+// Global feinere Darstellung: kleinere Punkte, dünnere Linien
+Chart.defaults.elements.point.radius = 1.5;
+Chart.defaults.elements.point.hoverRadius = 4;
+Chart.defaults.elements.line.borderWidth = 1.5;
+
 const timeAxisConfig = {
   type: 'linear',
   ticks: {
@@ -694,8 +705,8 @@ const chart = new Chart(ctx, {
   data: {
     labels: [],
     datasets: [
-      { label: 'CO2 (ppm)', data: [], borderColor: '#d2a8ff', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
-      { label: 'Feuchte (%)', data: [], borderColor: '#79c0ff', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2, borderDash: [6, 4] }
+      { label: 'CO2 (ppm)', data: [], borderColor: '#d4c5a9', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
+      { label: 'Feuchte (%)', data: [], borderColor: '#39c5cf', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2, borderDash: [6, 4] }
     ]
   },
   options: {
@@ -704,19 +715,26 @@ const chart = new Chart(ctx, {
     animation: false,
     scales: {
       x: timeAxisConfig,
-      y: { position: 'left', ticks: { color: '#d2a8ff' }, grid: { color: '#21262d' } },
-      y1: { position: 'right', ticks: { color: '#79c0ff' }, grid: { display: false } }
+      y: { position: 'left', ticks: { color: '#d4c5a9' }, grid: { color: '#21262d' } },
+      y1: { position: 'right', ticks: { color: '#39c5cf' }, grid: { display: false } }
     },
     plugins: { legend: { labels: { color: '#e6edf3' } }, tooltip: tooltipConfig }
   }
 });
+
+const CHART_WINDOW_MS = 10 * 60 * 1000; // festes 10-Minuten-Zeitfenster
 
 function updateChart() {
   // Ersten Messpunkt überspringen: direkt nach einem (Re-)Connect haben
   // manche Felder noch keinen jemals gesehenen Wert (kein Carry-Forward
   // möglich), wodurch Kurven versetzt zueinander zu starten scheinen.
   const chartSource = dataLog.length > 1 ? dataLog.slice(1) : dataLog;
-  const rawRecent = chartSource.slice(-120); // letzte 120 Punkte
+
+  // Festes 10-Minuten-Fenster statt fester Punktanzahl: nur Punkte der
+  // letzten 10 Minuten anzeigen, ältere wandern automatisch nach links raus.
+  const now = Date.now();
+  const windowStart = now - CHART_WINDOW_MS;
+  const rawRecent = chartSource.filter(p => p.t >= windowStart);
 
   // Bei Zeitlücken > 30 Sekunden zwischen zwei Messpunkten (das 5-fache des
   // normalen ~6-Sekunden-Rhythmus) einen künstlichen "Leerpunkt" einfügen,
@@ -734,6 +752,15 @@ function updateChart() {
   // Echte Zeitachse: x = tatsächlicher Zeitstempel (ms), nicht nur Reihenfolge -
   // der Abstand zwischen Punkten spiegelt jetzt die real vergangene Zeit wider.
   const pt = (p, key) => ({ x: p.t, y: p.isGap ? null : p[key] });
+
+  // Feste Achsengrenzen setzen, damit das Fenster IMMER exakt 10 Minuten
+  // zeigt (auch wenn noch keine 10 Minuten Daten vorliegen), statt sich an
+  // die vorhandenen Daten anzupassen.
+  const allCharts = [chart, chart2, chart3, chart4, chart5, chart6, chart7];
+  allCharts.forEach(c => {
+    c.options.scales.x.min = windowStart;
+    c.options.scales.x.max = now;
+  });
 
   chart.data.datasets[0].data = recent.map(p => pt(p, 'co2'));
   chart.data.datasets[1].data = recent.map(p => pt(p, 'humi'));
@@ -776,8 +803,8 @@ const chart2 = new Chart(ctx2, {
   data: {
     labels: [],
     datasets: [
-      { label: 'Temp (°C)', data: [], borderColor: '#ffa657', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
-      { label: 'VPD (kPa)', data: [], borderColor: '#7ee787', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2, borderDash: [6, 4] }
+      { label: 'Temp (°C)', data: [], borderColor: '#f85149', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
+      { label: 'VPD (kPa)', data: [], borderColor: '#3fb950', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2, borderDash: [6, 4] }
     ]
   },
   options: {
@@ -786,8 +813,8 @@ const chart2 = new Chart(ctx2, {
     animation: false,
     scales: {
       x: timeAxisConfig,
-      y: { position: 'left', ticks: { color: '#ffa657' }, grid: { color: '#21262d' } },
-      y1: { position: 'right', ticks: { color: '#7ee787' }, grid: { display: false } }
+      y: { position: 'left', ticks: { color: '#f85149' }, grid: { color: '#21262d' } },
+      y1: { position: 'right', ticks: { color: '#3fb950' }, grid: { display: false } }
     },
     plugins: { legend: { labels: { color: '#e6edf3' } }, tooltip: tooltipConfig }
   }
@@ -800,8 +827,8 @@ const chart3 = new Chart(ctx3, {
   data: {
     labels: [],
     datasets: [
-      { label: 'Boden-Temp (°C)', data: [], borderColor: '#ff7b72', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
-      { label: 'Boden-Feuchte (%)', data: [], borderColor: '#56d4dd', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2, borderDash: [6, 4] }
+      { label: 'Boden-Temp (°C)', data: [], borderColor: '#a1553a', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
+      { label: 'Boden-Feuchte (%)', data: [], borderColor: '#3a5ccc', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2, borderDash: [6, 4] }
     ]
   },
   options: {
@@ -810,8 +837,8 @@ const chart3 = new Chart(ctx3, {
     animation: false,
     scales: {
       x: timeAxisConfig,
-      y: { position: 'left', ticks: { color: '#ff7b72' }, grid: { color: '#21262d' } },
-      y1: { position: 'right', ticks: { color: '#56d4dd' }, grid: { display: false } }
+      y: { position: 'left', ticks: { color: '#a1553a' }, grid: { color: '#21262d' } },
+      y1: { position: 'right', ticks: { color: '#3a5ccc' }, grid: { display: false } }
     },
     plugins: { legend: { labels: { color: '#e6edf3' } }, tooltip: tooltipConfig }
   }
@@ -824,8 +851,8 @@ const chart4 = new Chart(ctx4, {
   data: {
     labels: [],
     datasets: [
-      { label: 'PPFD (µmol/m²/s)', data: [], borderColor: '#f2cc60', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
-      { label: 'Licht-Stufe (%)', data: [], borderColor: '#e3b341', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2, stepped: true, borderDash: [6, 4] }
+      { label: 'PPFD (µmol/m²/s)', data: [], borderColor: '#e3b341', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
+      { label: 'Licht-Stufe (%)', data: [], borderColor: '#f0883e', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2, stepped: true, borderDash: [6, 4] }
     ]
   },
   options: {
@@ -834,8 +861,8 @@ const chart4 = new Chart(ctx4, {
     animation: false,
     scales: {
       x: timeAxisConfig,
-      y: { position: 'left', min: 0, ticks: { color: '#f2cc60' }, grid: { color: '#21262d' } },
-      y1: { position: 'right', min: 0, max: 100, ticks: { color: '#e3b341' }, grid: { display: false } }
+      y: { position: 'left', min: 0, ticks: { color: '#e3b341' }, grid: { color: '#21262d' } },
+      y1: { position: 'right', min: 0, max: 100, ticks: { color: '#f0883e' }, grid: { display: false } }
     },
     plugins: { legend: { labels: { color: '#e6edf3' } }, tooltip: tooltipConfig }
   }
@@ -848,7 +875,7 @@ const chart5 = new Chart(ctx5, {
   data: {
     labels: [],
     datasets: [
-      { label: 'Inline-Lüfter (%)', data: [], borderColor: '#a5a5f0', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
+      { label: 'Inline-Lüfter (%)', data: [], borderColor: '#6e40c9', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
       { label: 'CO2-Steckdose (0/1)', data: [], borderColor: '#d2a8ff', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0, stepped: true, borderDash: [6, 4] }
     ]
   },
@@ -858,7 +885,7 @@ const chart5 = new Chart(ctx5, {
     animation: false,
     scales: {
       x: timeAxisConfig,
-      y: { position: 'left', min: 0, max: 100, ticks: { color: '#a5a5f0' }, grid: { color: '#21262d' } },
+      y: { position: 'left', min: 0, max: 100, ticks: { color: '#6e40c9' }, grid: { color: '#21262d' } },
       y1: { position: 'right', min: 0, max: 1, ticks: { color: '#d2a8ff', stepSize: 1 }, grid: { display: false } }
     },
     plugins: { legend: { labels: { color: '#e6edf3' } }, tooltip: tooltipConfig }
@@ -877,9 +904,9 @@ const chart6 = new Chart(ctx6, {
   data: {
     labels: [],
     datasets: [
-      { label: 'CO2 (ppm)', data: [], borderColor: '#d2a8ff', backgroundColor: 'transparent', yAxisID: 'yCo2', tension: 0.2 },
-      { label: 'Inline-Lüfter (%)', data: [], borderColor: '#a5a5f0', backgroundColor: 'transparent', yAxisID: 'yPct', tension: 0.2, borderDash: [6, 4] },
-      { label: 'CO2-Steckdose (0/1)', data: [], borderColor: '#79c0ff', backgroundColor: 'transparent', yAxisID: 'yBin', tension: 0, stepped: true, borderDash: [2, 2] }
+      { label: 'CO2 (ppm)', data: [], borderColor: '#d4c5a9', backgroundColor: 'transparent', yAxisID: 'yCo2', tension: 0.2 },
+      { label: 'Inline-Lüfter (%)', data: [], borderColor: '#6e40c9', backgroundColor: 'transparent', yAxisID: 'yPct', tension: 0.2, borderDash: [6, 4] },
+      { label: 'CO2-Steckdose (0/1)', data: [], borderColor: '#d2a8ff', backgroundColor: 'transparent', yAxisID: 'yBin', tension: 0, stepped: true, borderDash: [2, 2] }
     ]
   },
   options: {
@@ -888,8 +915,8 @@ const chart6 = new Chart(ctx6, {
     animation: false,
     scales: {
       x: timeAxisConfig,
-      yCo2: { position: 'left', ticks: { color: '#d2a8ff' }, grid: { color: '#21262d' } },
-      yPct: { position: 'right', min: 0, max: 100, ticks: { color: '#a5a5f0' }, grid: { display: false } },
+      yCo2: { position: 'left', ticks: { color: '#d4c5a9' }, grid: { color: '#21262d' } },
+      yPct: { position: 'right', min: 0, max: 100, ticks: { color: '#6e40c9' }, grid: { display: false } },
       yBin: { position: 'right', min: 0, max: 1, display: false }
     },
     plugins: { legend: { labels: { color: '#e6edf3' } }, tooltip: tooltipConfig }
@@ -902,12 +929,12 @@ const chart7 = new Chart(ctx7, {
   data: {
     labels: [],
     datasets: [
-      { label: 'CO2 (ppm)', data: [], borderColor: '#d2a8ff', backgroundColor: 'transparent', yAxisID: 'yCo2', tension: 0.2 },
-      { label: 'Feuchte (%)', data: [], borderColor: '#79c0ff', backgroundColor: 'transparent', yAxisID: 'yPct', tension: 0.2, borderDash: [6, 4] },
-      { label: 'Temp (°C)', data: [], borderColor: '#ffa657', backgroundColor: 'transparent', yAxisID: 'yTemp', tension: 0.2 },
-      { label: 'VPD (kPa)', data: [], borderColor: '#7ee787', backgroundColor: 'transparent', yAxisID: 'yVpd', tension: 0.2, borderDash: [6, 4] },
-      { label: 'PPFD', data: [], borderColor: '#f2cc60', backgroundColor: 'transparent', yAxisID: 'yPpfd', tension: 0.2 },
-      { label: 'Inline-Lüfter (%)', data: [], borderColor: '#a5a5f0', backgroundColor: 'transparent', yAxisID: 'yPct', tension: 0.2, borderDash: [2, 2] }
+      { label: 'CO2 (ppm)', data: [], borderColor: '#d4c5a9', backgroundColor: 'transparent', yAxisID: 'yCo2', tension: 0.2 },
+      { label: 'Feuchte (%)', data: [], borderColor: '#39c5cf', backgroundColor: 'transparent', yAxisID: 'yPct', tension: 0.2, borderDash: [6, 4] },
+      { label: 'Temp (°C)', data: [], borderColor: '#f85149', backgroundColor: 'transparent', yAxisID: 'yTemp', tension: 0.2 },
+      { label: 'VPD (kPa)', data: [], borderColor: '#3fb950', backgroundColor: 'transparent', yAxisID: 'yVpd', tension: 0.2, borderDash: [6, 4] },
+      { label: 'PPFD', data: [], borderColor: '#e3b341', backgroundColor: 'transparent', yAxisID: 'yPpfd', tension: 0.2 },
+      { label: 'Inline-Lüfter (%)', data: [], borderColor: '#6e40c9', backgroundColor: 'transparent', yAxisID: 'yPct', tension: 0.2, borderDash: [2, 2] }
     ]
   },
   options: {
@@ -916,8 +943,8 @@ const chart7 = new Chart(ctx7, {
     animation: false,
     scales: {
       x: timeAxisConfig,
-      yCo2:  { position: 'left',  ticks: { color: '#d2a8ff' }, grid: { color: '#21262d' } },
-      yPct:  { position: 'right', min: 0, max: 100, ticks: { color: '#79c0ff' }, grid: { display: false } },
+      yCo2:  { position: 'left',  ticks: { color: '#d4c5a9' }, grid: { color: '#21262d' } },
+      yPct:  { position: 'right', min: 0, max: 100, ticks: { color: '#39c5cf' }, grid: { display: false } },
       yTemp: { position: 'left',  display: false },
       yVpd:  { position: 'right', display: false },
       yPpfd: { position: 'left',  display: false }

@@ -121,7 +121,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.24</span></h1>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.26</span></h1>
 <div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
 
@@ -133,6 +133,7 @@
   </div>
   <button id="connectBtn">Mit GGS Controller verbinden</button>
   <button id="disconnectBtn" class="secondary" style="display:none;">Trennen</button>
+  <button id="forceReconnectBtn" class="secondary" style="display:none;">Jetzt neu verbinden (falls eingefroren)</button>
 
   <div class="grid">
     <div class="metric co2"><div class="label">CO2</div><div class="value" id="valCo2">—</div></div>
@@ -223,25 +224,52 @@ const disconnectBtn = document.getElementById('disconnectBtn');
 const rawOut = document.getElementById('rawOut');
 const logCount = document.getElementById('logCount');
 
+function forceReconnect(reason) {
+  if (!device) return;
+  console.warn('Erzwinge Reconnect: ' + reason);
+  setStatus('connecting', reason + ' - erzwinge Neuverbindung…');
+  lastPacketTimestamp = Date.now(); // verhindert mehrfaches Auslösen während des Reconnects
+  if (device.gatt.connected) {
+    device.gatt.disconnect(); // löst onDisconnected aus, das den Auto-Reconnect übernimmt
+  } else {
+    onDisconnected();
+  }
+}
+
+document.getElementById('forceReconnectBtn').addEventListener('click', () => {
+  forceReconnect('Manuell ausgelöst');
+});
+
 // Wachhund: erkennt "Zombie"-Verbindungen (Browser meldet "verbunden",
 // aber es kommen keine Pakete mehr an) und erzwingt in diesem Fall einen
 // Reconnect, unabhängig davon, ob der Browser selbst ein Trennungs-Ereignis
 // auslöst (das passiert nicht zuverlässig bei jeder Art von Verbindungsverlust).
 setInterval(() => {
   if (!shouldAutoReconnect || !device) return;
-  if (lastPacketTimestamp === null) return; // noch nie Daten erhalten, nichts zu prüfen
+  if (lastPacketTimestamp === null) return;
   const silentFor = Date.now() - lastPacketTimestamp;
   if (silentFor > 45000) {
-    console.warn('Wachhund: seit ' + Math.round(silentFor/1000) + 's keine Pakete mehr - erzwinge Reconnect');
-    setStatus('connecting', 'Keine Daten seit ' + Math.round(silentFor/1000) + 's - erzwinge Neuverbindung…');
-    lastPacketTimestamp = Date.now(); // verhindert mehrfaches Auslösen während des Reconnects
-    if (device.gatt.connected) {
-      device.gatt.disconnect(); // löst onDisconnected aus, das den Auto-Reconnect übernimmt
-    } else {
-      onDisconnected();
-    }
+    forceReconnect('Keine Daten seit ' + Math.round(silentFor/1000) + 's');
   }
 }, 30000);
+
+// Sobald die Seite wieder sichtbar wird (z.B. nach Tab-/App-Wechsel oder
+// Bildschirm-Entsperren), sofort prüfen statt bis zu 30s auf den Wachhund
+// zu warten - Hintergrund-Drosselung durch Android kann die Verbindung
+// eingefroren haben, ohne dass der Browser das selbst bemerkt hat.
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'visible') {
+    if (wakeLock === null && shouldAutoReconnect) {
+      try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) { /* best effort */ }
+    }
+    if (shouldAutoReconnect && device && lastPacketTimestamp !== null) {
+      const silentFor = Date.now() - lastPacketTimestamp;
+      if (silentFor > 20000) {
+        forceReconnect('Seite wieder aktiv, seit ' + Math.round(silentFor/1000) + 's keine Daten');
+      }
+    }
+  }
+});
 
 function setStatus(state, text) {
   dot.className = 'dot ' + state;
@@ -265,8 +293,10 @@ connectBtn.addEventListener('click', async () => {
     setStatus('connected', 'Verbunden: ' + device.name);
     connectBtn.style.display = 'none';
     disconnectBtn.style.display = 'block';
+    document.getElementById('forceReconnectBtn').style.display = 'block';
     rawOut.textContent = 'Verbunden. Warte auf erstes Datenpaket vom Controller...';
     shouldAutoReconnect = true;
+    lastPacketTimestamp = Date.now();
 
     try {
       wakeLock = await navigator.wakeLock.request('screen');
@@ -283,6 +313,7 @@ connectBtn.addEventListener('click', async () => {
 disconnectBtn.addEventListener('click', () => {
   shouldAutoReconnect = false;
   if (wakeLock) { wakeLock.release(); wakeLock = null; }
+  document.getElementById('forceReconnectBtn').style.display = 'none';
   if (device && device.gatt.connected) device.gatt.disconnect();
 });
 
@@ -290,6 +321,7 @@ async function onDisconnected() {
   setStatus('', shouldAutoReconnect ? 'Getrennt - versuche erneut zu verbinden…' : 'Getrennt');
   connectBtn.style.display = 'block';
   disconnectBtn.style.display = 'none';
+  if (!shouldAutoReconnect) document.getElementById('forceReconnectBtn').style.display = 'none';
 
   if (shouldAutoReconnect && device) {
     // Automatischer Wiederverbindungsversuch nach kurzer Pause
@@ -304,21 +336,13 @@ async function onDisconnected() {
       setStatus('connected', 'Wiederverbunden: ' + device.name);
       connectBtn.style.display = 'none';
       disconnectBtn.style.display = 'block';
+      lastPacketTimestamp = Date.now();
     } catch (reErr) {
       setStatus('', 'Wiederverbinden fehlgeschlagen: ' + reErr.message);
       console.error(reErr);
     }
   }
 }
-
-// Wake Lock nach Bildschirm-Reaktivierung erneut anfordern (Browser gibt ihn bei Tab-Wechsel frei)
-document.addEventListener('visibilitychange', async () => {
-  if (wakeLock === null && shouldAutoReconnect && document.visibilityState === 'visible') {
-    try {
-      wakeLock = await navigator.wakeLock.request('screen');
-    } catch (e) { /* still fine, best effort */ }
-  }
-});
 
 let packetCount = 0;
 let packetHistory = [];
@@ -666,7 +690,7 @@ const chart5 = new Chart(ctx5, {
     scales: {
       x: { ticks: { color: '#8b949e', maxTicksLimit: 6 }, grid: { color: '#21262d' } },
       y: { position: 'left', min: 0, max: 100, ticks: { color: '#a5a5f0' }, grid: { color: '#21262d' } },
-      y1: { position: 'right', min: -0.1, max: 1.1, ticks: { color: '#d2a8ff', stepSize: 1 }, grid: { display: false } }
+      y1: { position: 'right', min: 0, max: 1, ticks: { color: '#d2a8ff', stepSize: 1 }, grid: { display: false } }
     },
     plugins: { legend: { labels: { color: '#e6edf3' } } }
   }

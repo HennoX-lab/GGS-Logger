@@ -121,7 +121,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.35</span></h1>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.36</span></h1>
 <div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
 
@@ -173,6 +173,11 @@
 
 <div class="card">
   <div class="chart-container"><canvas id="chart5"></canvas></div>
+</div>
+
+<div class="card">
+  <div class="label" style="font-size:0.75rem;color:#8b949e;margin-bottom:6px;">Gesamt-Übersicht (CO2, Feuchte, Temp, VPD, PPFD, Inline-Lüfter)</div>
+  <div class="chart-container" style="height:60vh;"><canvas id="chart6"></canvas></div>
 </div>
 
 <div class="card">
@@ -706,6 +711,14 @@ function updateChart() {
   chart5.data.datasets[0].data = recent.map(p => pt(p, 'blowerLevel'));
   chart5.data.datasets[1].data = recent.map(p => pt(p, 'co2SocketOn'));
   chart5.update('none');
+
+  chart6.data.datasets[0].data = recent.map(p => pt(p, 'co2'));
+  chart6.data.datasets[1].data = recent.map(p => pt(p, 'humi'));
+  chart6.data.datasets[2].data = recent.map(p => pt(p, 'temp'));
+  chart6.data.datasets[3].data = recent.map(p => pt(p, 'vpd'));
+  chart6.data.datasets[4].data = recent.map(p => pt(p, 'ppfd'));
+  chart6.data.datasets[5].data = recent.map(p => pt(p, 'blowerLevel'));
+  chart6.update('none');
 }
 
 // Chart 2: Temp & VPD
@@ -803,6 +816,40 @@ const chart5 = new Chart(ctx5, {
     plugins: { legend: { labels: { color: '#e6edf3' } }, tooltip: tooltipConfig }
   }
 });
+// Chart 6: Gesamt-Übersicht - CO2, Feuchte, Temp, VPD, PPFD, Inline-Lüfter
+// zusammen in einem Chart, um Zusammenhänge zu erkennen (auf Wunsch, auch
+// wenn dadurch unübersichtlicher). Mehrere Achsen, teils ausgeblendet
+// (nur Tick-Farbe als Referenz), um das Chaos etwas einzugrenzen.
+const ctx6 = document.getElementById('chart6').getContext('2d');
+const chart6 = new Chart(ctx6, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      { label: 'CO2 (ppm)', data: [], borderColor: '#d2a8ff', backgroundColor: 'transparent', yAxisID: 'yCo2', tension: 0.2 },
+      { label: 'Feuchte (%)', data: [], borderColor: '#79c0ff', backgroundColor: 'transparent', yAxisID: 'yPct', tension: 0.2, borderDash: [6, 4] },
+      { label: 'Temp (°C)', data: [], borderColor: '#ffa657', backgroundColor: 'transparent', yAxisID: 'yTemp', tension: 0.2 },
+      { label: 'VPD (kPa)', data: [], borderColor: '#7ee787', backgroundColor: 'transparent', yAxisID: 'yVpd', tension: 0.2, borderDash: [6, 4] },
+      { label: 'PPFD', data: [], borderColor: '#f2cc60', backgroundColor: 'transparent', yAxisID: 'yPpfd', tension: 0.2 },
+      { label: 'Inline-Lüfter (%)', data: [], borderColor: '#a5a5f0', backgroundColor: 'transparent', yAxisID: 'yPct', tension: 0.2, borderDash: [2, 2] }
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    scales: {
+      x: timeAxisConfig,
+      yCo2:  { position: 'left',  ticks: { color: '#d2a8ff' }, grid: { color: '#21262d' } },
+      yPct:  { position: 'right', min: 0, max: 100, ticks: { color: '#79c0ff' }, grid: { display: false } },
+      yTemp: { position: 'left',  display: false },
+      yVpd:  { position: 'right', display: false },
+      yPpfd: { position: 'left',  display: false }
+    },
+    plugins: { legend: { labels: { color: '#e6edf3', boxWidth: 12, font: { size: 10 } } }, tooltip: tooltipConfig }
+  }
+});
+
 document.getElementById('exportBtn').addEventListener('click', () => {
   let csv = 'Zeitstempel;CO2_ppm;Feuchte_%;Temp_C;VPD_kPa;PPFD;Boden_Temp_C;Boden_Feuchte_%;Licht_Stufe;Bluefter_An;CO2_Steckdose_An;Fan_An;Fan_Gang\n';
   dataLog.forEach(p => {

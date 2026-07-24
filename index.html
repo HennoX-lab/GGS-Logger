@@ -121,7 +121,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.33</span></h1>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.35</span></h1>
 <div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
 
@@ -225,16 +225,42 @@ const disconnectBtn = document.getElementById('disconnectBtn');
 const rawOut = document.getElementById('rawOut');
 const logCount = document.getElementById('logCount');
 
-function forceReconnect(reason) {
-  console.warn('Erzwinge Reconnect via Reload: ' + reason);
+async function attemptSoftReconnect() {
+  if (!device) return false;
+  try {
+    if (device.gatt.connected) device.gatt.disconnect();
+    await new Promise(r => setTimeout(r, 500));
+    server = await device.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE_UUID);
+    notifyChar = await service.getCharacteristic(NOTIFY_UUID);
+    await notifyChar.startNotifications();
+    notifyChar.addEventListener('characteristicvaluechanged', handleNotification);
+    setStatus('connected', 'Schnell wiederverbunden: ' + device.name);
+    lastPacketTimestamp = Date.now();
+    return true;
+  } catch (err) {
+    console.warn('Soft-Reconnect fehlgeschlagen:', err.message);
+    return false;
+  }
+}
+
+async function forceReconnect(reason) {
+  console.warn('Erzwinge Reconnect: ' + reason);
   if (navigator.vibrate) {
     try { navigator.vibrate([200, 100, 200]); } catch (e) { /* ignore */ }
   }
-  // Ein einfaches disconnect()+connect() auf demselben Geräte-Objekt reicht
-  // nachweislich nicht - der Browser kann in einen "Zombie"-Zustand geraten,
-  // der nur durch einen kompletten Reload des JS-Kontexts behoben wird.
-  // localStorage-Flag sorgt dafür, dass nach dem Reload automatisch wieder
-  // verbunden wird, ohne dass ein erneuter Klick nötig ist.
+  setStatus('connecting', reason + ' - schneller Reconnect-Versuch…');
+  lastPacketTimestamp = Date.now(); // verhindert mehrfaches Auslösen während des Versuchs
+
+  // Zuerst einen schnellen, leichten Reconnect auf demselben Geräte-Objekt
+  // versuchen - deutlich schneller als ein kompletter Seiten-Reload, und
+  // reicht oft schon aus (Zombie-Zustand ist nicht immer der Fall).
+  const softOk = await attemptSoftReconnect();
+  if (softOk) return;
+
+  // Nur falls das nicht klappt: kompletter Reload als letzter Ausweg
+  // (langsamer, aber zuverlässiger bei echten Zombie-Zuständen).
+  console.warn('Soft-Reconnect erfolglos, lade Seite komplett neu…');
   setStatus('connecting', reason + ' - lade Seite neu…');
   location.reload();
 }
@@ -251,10 +277,10 @@ setInterval(() => {
   if (!shouldAutoReconnect || !device) return;
   if (lastPacketTimestamp === null) return;
   const silentFor = Date.now() - lastPacketTimestamp;
-  if (silentFor > 45000) {
+  if (silentFor > 20000) {
     forceReconnect('Keine Daten seit ' + Math.round(silentFor/1000) + 's');
   }
-}, 30000);
+}, 15000);
 
 // Sobald die Seite wieder sichtbar wird (z.B. nach Tab-/App-Wechsel oder
 // Bildschirm-Entsperren), sofort prüfen statt bis zu 30s auf den Wachhund
@@ -625,7 +651,7 @@ const chart = new Chart(ctx, {
     labels: [],
     datasets: [
       { label: 'CO2 (ppm)', data: [], borderColor: '#d2a8ff', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
-      { label: 'Feuchte (%)', data: [], borderColor: '#79c0ff', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2 }
+      { label: 'Feuchte (%)', data: [], borderColor: '#79c0ff', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2, borderDash: [6, 4] }
     ]
   },
   options: {
@@ -690,7 +716,7 @@ const chart2 = new Chart(ctx2, {
     labels: [],
     datasets: [
       { label: 'Temp (°C)', data: [], borderColor: '#ffa657', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
-      { label: 'VPD (kPa)', data: [], borderColor: '#7ee787', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2 }
+      { label: 'VPD (kPa)', data: [], borderColor: '#7ee787', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2, borderDash: [6, 4] }
     ]
   },
   options: {
@@ -714,7 +740,7 @@ const chart3 = new Chart(ctx3, {
     labels: [],
     datasets: [
       { label: 'Boden-Temp (°C)', data: [], borderColor: '#ff7b72', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
-      { label: 'Boden-Feuchte (%)', data: [], borderColor: '#56d4dd', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2 }
+      { label: 'Boden-Feuchte (%)', data: [], borderColor: '#56d4dd', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2, borderDash: [6, 4] }
     ]
   },
   options: {
@@ -738,7 +764,7 @@ const chart4 = new Chart(ctx4, {
     labels: [],
     datasets: [
       { label: 'PPFD (µmol/m²/s)', data: [], borderColor: '#f2cc60', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
-      { label: 'Licht-Stufe (%)', data: [], borderColor: '#e3b341', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2, stepped: true }
+      { label: 'Licht-Stufe (%)', data: [], borderColor: '#e3b341', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.2, stepped: true, borderDash: [6, 4] }
     ]
   },
   options: {
@@ -762,7 +788,7 @@ const chart5 = new Chart(ctx5, {
     labels: [],
     datasets: [
       { label: 'Inline-Lüfter (%)', data: [], borderColor: '#a5a5f0', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.2 },
-      { label: 'CO2-Steckdose (0/1)', data: [], borderColor: '#d2a8ff', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0, stepped: true }
+      { label: 'CO2-Steckdose (0/1)', data: [], borderColor: '#d2a8ff', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0, stepped: true, borderDash: [6, 4] }
     ]
   },
   options: {

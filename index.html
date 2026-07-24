@@ -121,7 +121,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.26</span></h1>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.27</span></h1>
 <div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
 
@@ -225,15 +225,14 @@ const rawOut = document.getElementById('rawOut');
 const logCount = document.getElementById('logCount');
 
 function forceReconnect(reason) {
-  if (!device) return;
-  console.warn('Erzwinge Reconnect: ' + reason);
-  setStatus('connecting', reason + ' - erzwinge Neuverbindung…');
-  lastPacketTimestamp = Date.now(); // verhindert mehrfaches Auslösen während des Reconnects
-  if (device.gatt.connected) {
-    device.gatt.disconnect(); // löst onDisconnected aus, das den Auto-Reconnect übernimmt
-  } else {
-    onDisconnected();
-  }
+  console.warn('Erzwinge Reconnect via Reload: ' + reason);
+  // Ein einfaches disconnect()+connect() auf demselben Geräte-Objekt reicht
+  // nachweislich nicht - der Browser kann in einen "Zombie"-Zustand geraten,
+  // der nur durch einen kompletten Reload des JS-Kontexts behoben wird.
+  // localStorage-Flag sorgt dafür, dass nach dem Reload automatisch wieder
+  // verbunden wird, ohne dass ein erneuter Klick nötig ist.
+  setStatus('connecting', reason + ' - lade Seite neu…');
+  location.reload();
 }
 
 document.getElementById('forceReconnectBtn').addEventListener('click', () => {
@@ -276,42 +275,73 @@ function setStatus(state, text) {
   statusText.textContent = text;
 }
 
+async function establishConnection(targetDevice) {
+  device = targetDevice;
+  device.addEventListener('gattserverdisconnected', onDisconnected);
+  setStatus('connecting', 'Verbinde…');
+  server = await device.gatt.connect();
+  const service = await server.getPrimaryService(SERVICE_UUID);
+  notifyChar = await service.getCharacteristic(NOTIFY_UUID);
+  await notifyChar.startNotifications();
+  notifyChar.addEventListener('characteristicvaluechanged', handleNotification);
+  setStatus('connected', 'Verbunden: ' + device.name);
+  connectBtn.style.display = 'none';
+  disconnectBtn.style.display = 'block';
+  document.getElementById('forceReconnectBtn').style.display = 'block';
+  rawOut.textContent = 'Verbunden. Warte auf erstes Datenpaket vom Controller...';
+  shouldAutoReconnect = true;
+  lastPacketTimestamp = Date.now();
+  localStorage.setItem('ggs_autoconnect', '1');
+
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => console.log('Wake Lock freigegeben'));
+  } catch (wlErr) {
+    console.warn('Wake Lock nicht verfügbar:', wlErr.message);
+  }
+}
+
 connectBtn.addEventListener('click', async () => {
   try {
     setStatus('connecting', 'Suche Gerät…');
-    device = await navigator.bluetooth.requestDevice({
+    const chosenDevice = await navigator.bluetooth.requestDevice({
       filters: [{ namePrefix: 'SF-GGS' }],
       optionalServices: [SERVICE_UUID]
     });
-    device.addEventListener('gattserverdisconnected', onDisconnected);
-    setStatus('connecting', 'Verbinde…');
-    server = await device.gatt.connect();
-    const service = await server.getPrimaryService(SERVICE_UUID);
-    notifyChar = await service.getCharacteristic(NOTIFY_UUID);
-    await notifyChar.startNotifications();
-    notifyChar.addEventListener('characteristicvaluechanged', handleNotification);
-    setStatus('connected', 'Verbunden: ' + device.name);
-    connectBtn.style.display = 'none';
-    disconnectBtn.style.display = 'block';
-    document.getElementById('forceReconnectBtn').style.display = 'block';
-    rawOut.textContent = 'Verbunden. Warte auf erstes Datenpaket vom Controller...';
-    shouldAutoReconnect = true;
-    lastPacketTimestamp = Date.now();
-
-    try {
-      wakeLock = await navigator.wakeLock.request('screen');
-      wakeLock.addEventListener('release', () => console.log('Wake Lock freigegeben'));
-    } catch (wlErr) {
-      console.warn('Wake Lock nicht verfügbar:', wlErr.message);
-    }
+    await establishConnection(chosenDevice);
   } catch (err) {
     setStatus('', 'Fehler: ' + err.message);
     console.error(err);
   }
 });
 
+// Nach einem erzwungenen Seiten-Reload (siehe forceReconnect) automatisch
+// wieder verbinden, ohne dass der Nutzer erneut auf "Verbinden" tippen muss -
+// nutzt bereits erteilte Berechtigungen (kein neuer requestDevice()-Dialog nötig).
+async function tryAutoReconnectAfterReload() {
+  if (localStorage.getItem('ggs_autoconnect') !== '1') return;
+  if (!navigator.bluetooth || !navigator.bluetooth.getDevices) {
+    setStatus('', 'Auto-Reconnect nach Reload nicht unterstützt - bitte manuell verbinden');
+    return;
+  }
+  try {
+    setStatus('connecting', 'Automatische Neuverbindung nach Reload…');
+    const known = await navigator.bluetooth.getDevices();
+    const match = known.find(d => d.name && d.name.startsWith('SF-GGS'));
+    if (!match) {
+      setStatus('', 'Kein bekanntes Gerät gefunden - bitte manuell verbinden');
+      return;
+    }
+    await establishConnection(match);
+  } catch (err) {
+    setStatus('', 'Automatische Neuverbindung fehlgeschlagen: ' + err.message);
+    console.error(err);
+  }
+}
+
 disconnectBtn.addEventListener('click', () => {
   shouldAutoReconnect = false;
+  localStorage.removeItem('ggs_autoconnect');
   if (wakeLock) { wakeLock.release(); wakeLock = null; }
   document.getElementById('forceReconnectBtn').style.display = 'none';
   if (device && device.gatt.connected) device.gatt.disconnect();
@@ -338,8 +368,8 @@ async function onDisconnected() {
       disconnectBtn.style.display = 'block';
       lastPacketTimestamp = Date.now();
     } catch (reErr) {
-      setStatus('', 'Wiederverbinden fehlgeschlagen: ' + reErr.message);
-      console.error(reErr);
+      console.warn('Soft-Reconnect fehlgeschlagen, falle auf Reload zurück:', reErr.message);
+      forceReconnect('Wiederverbinden fehlgeschlagen');
     }
   }
 }
@@ -737,6 +767,7 @@ if (!navigator.bluetooth) {
 }
 
 loadFromLocalStorage();
+tryAutoReconnectAfterReload();
 </script>
 </body>
 </html>

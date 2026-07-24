@@ -121,7 +121,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.30</span></h1>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.33</span></h1>
 <div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
 
@@ -463,7 +463,7 @@ function handleNotification(event) {
     const m = jsonStr.match(new RegExp('"' + name + '":(.*?),"' + nextKey + '"'));
     if (!m) return null;
     const cleaned = m[1].replace(/[^0-9.\-]/g, '');
-    const pattern = requireDecimal ? /^-?[0-9]{1,3}\.[0-9]{1,2}$/ : /^-?[0-9]{1,4}$/;
+    const pattern = requireDecimal ? /^-?[0-9]{1,3}\.[0-9]{1,2}$/ : /^-?[0-9]{1,4}(\.[0-9]{1,2})?$/;
     if (!pattern.test(cleaned)) return null;
     const val = parseFloat(cleaned);
     if (isNaN(val) || val < min || val > max) return null;
@@ -612,6 +612,12 @@ const timeAxisConfig = {
   grid: { color: '#21262d' }
 };
 
+const tooltipConfig = {
+  callbacks: {
+    title: (items) => items.length ? new Date(items[0].parsed.x).toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit', second:'2-digit'}) : ''
+  }
+};
+
 const ctx = document.getElementById('chart').getContext('2d');
 const chart = new Chart(ctx, {
   type: 'line',
@@ -631,17 +637,18 @@ const chart = new Chart(ctx, {
       y: { position: 'left', ticks: { color: '#d2a8ff' }, grid: { color: '#21262d' } },
       y1: { position: 'right', ticks: { color: '#79c0ff' }, grid: { display: false } }
     },
-    plugins: { legend: { labels: { color: '#e6edf3' } } }
+    plugins: { legend: { labels: { color: '#e6edf3' } }, tooltip: tooltipConfig }
   }
 });
 
 function updateChart() {
   const rawRecent = dataLog.slice(-120); // letzte 120 Punkte
 
-  // Bei Zeitlücken > 2 Minuten zwischen zwei Messpunkten einen künstlichen
-  // "Leerpunkt" einfügen, damit die Kurve dort sichtbar unterbrochen wird,
-  // statt die Ausfallzeit fälschlich glatt durchzuziehen.
-  const GAP_THRESHOLD_MS = 2 * 60 * 1000;
+  // Bei Zeitlücken > 30 Sekunden zwischen zwei Messpunkten (das 5-fache des
+  // normalen ~6-Sekunden-Rhythmus) einen künstlichen "Leerpunkt" einfügen,
+  // damit die Kurve dort sichtbar unterbrochen wird, statt die Ausfallzeit
+  // fälschlich glatt durchzuziehen.
+  const GAP_THRESHOLD_MS = 30 * 1000;
   const recent = [];
   for (let i = 0; i < rawRecent.length; i++) {
     if (i > 0 && (rawRecent[i].t - rawRecent[i-1].t) > GAP_THRESHOLD_MS) {
@@ -695,7 +702,7 @@ const chart2 = new Chart(ctx2, {
       y: { position: 'left', ticks: { color: '#ffa657' }, grid: { color: '#21262d' } },
       y1: { position: 'right', ticks: { color: '#7ee787' }, grid: { display: false } }
     },
-    plugins: { legend: { labels: { color: '#e6edf3' } } }
+    plugins: { legend: { labels: { color: '#e6edf3' } }, tooltip: tooltipConfig }
   }
 });
 
@@ -719,7 +726,7 @@ const chart3 = new Chart(ctx3, {
       y: { position: 'left', ticks: { color: '#ff7b72' }, grid: { color: '#21262d' } },
       y1: { position: 'right', ticks: { color: '#56d4dd' }, grid: { display: false } }
     },
-    plugins: { legend: { labels: { color: '#e6edf3' } } }
+    plugins: { legend: { labels: { color: '#e6edf3' } }, tooltip: tooltipConfig }
   }
 });
 
@@ -743,7 +750,7 @@ const chart4 = new Chart(ctx4, {
       y: { position: 'left', min: 0, ticks: { color: '#f2cc60' }, grid: { color: '#21262d' } },
       y1: { position: 'right', min: 0, max: 100, ticks: { color: '#e3b341' }, grid: { display: false } }
     },
-    plugins: { legend: { labels: { color: '#e6edf3' } } }
+    plugins: { legend: { labels: { color: '#e6edf3' } }, tooltip: tooltipConfig }
   }
 });
 
@@ -767,7 +774,7 @@ const chart5 = new Chart(ctx5, {
       y: { position: 'left', min: 0, max: 100, ticks: { color: '#a5a5f0' }, grid: { color: '#21262d' } },
       y1: { position: 'right', min: 0, max: 1, ticks: { color: '#d2a8ff', stepSize: 1 }, grid: { display: false } }
     },
-    plugins: { legend: { labels: { color: '#e6edf3' } } }
+    plugins: { legend: { labels: { color: '#e6edf3' } }, tooltip: tooltipConfig }
   }
 });
 document.getElementById('exportBtn').addEventListener('click', () => {

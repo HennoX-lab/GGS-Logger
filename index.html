@@ -14,7 +14,7 @@
     color: #e6edf3;
     min-height: 100vh;
     padding: 16px;
-    max-width: 900px;
+    max-width: 1800px;
     margin-left: auto;
     margin-right: auto;
   }
@@ -95,6 +95,9 @@
   @media (orientation: landscape) and (max-width: 1000px) {
     .chart-container { height: 60vh; }
   }
+  @media (min-width: 1400px) {
+    .grid { grid-template-columns: repeat(4, 1fr) !important; }
+  }
   .raw {
     font-family: monospace;
     font-size: 0.7rem;
@@ -121,7 +124,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.37</span></h1>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.39</span></h1>
 <div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
 
@@ -146,10 +149,10 @@
     <div class="metric"><div class="label">Boden-Feuchte</div><div class="value" style="color:#56d4dd;" id="valHumiSoil">—</div></div>
   </div>
   <div class="grid" style="margin-top:10px;grid-template-columns:1fr 1fr;">
-    <div class="metric"><div class="label">PPFD</div><div class="value" style="color:#f2cc60;font-size:1.2rem;" id="valPpfd">—</div></div>
-    <div class="metric"><div class="label">Licht-Stufe</div><div class="value" style="color:#e3b341;font-size:1.2rem;" id="valLightLevel">—</div></div>
-    <div class="metric"><div class="label">Inline-Lüfter</div><div class="value" style="color:#a5a5f0;font-size:1.2rem;" id="valBlowerLevel">—</div></div>
-    <div class="metric"><div class="label">CO2-Steckdose</div><div class="value" style="color:#d2a8ff;font-size:1.2rem;" id="valCo2Socket">—</div></div>
+    <div class="metric"><div class="label">PPFD</div><div class="value" style="color:#f2cc60;" id="valPpfd">—</div></div>
+    <div class="metric"><div class="label">Licht-Stufe</div><div class="value" style="color:#e3b341;" id="valLightLevel">—</div></div>
+    <div class="metric"><div class="label">Inline-Lüfter</div><div class="value" style="color:#a5a5f0;" id="valBlowerLevel">—</div></div>
+    <div class="metric"><div class="label">CO2-Steckdose</div><div class="value" style="color:#d2a8ff;" id="valCo2Socket">—</div></div>
   </div>
 
   <div class="log-count" id="logCount">0 Messpunkte aufgezeichnet</div>
@@ -551,11 +554,11 @@ function handleNotification(event) {
     return isNaN(val) ? null : val;
   }
 
-  const lightSection = (jsonStr.match(/"light":\{(.*?)\},"light2"/) || [])[1] || null;
+  const lightSection = (jsonStr.match(/"light":\{(.*?)\}[^"]*,"light2"/) || [])[1] || null;
   const lightLevelVal = extractIntFromSection(lightSection, 'level', '(?:\\}|$)');
   const lightModeVal = extractIntFromSection(lightSection, 'modeType', ',"level"');
 
-  const blowerSection = (jsonStr.match(/"blower":\{(.*?)\},"fan"/) || [])[1] || null;
+  const blowerSection = (jsonStr.match(/"blower":\{(.*?)\}[^"]*,"fan"/) || [])[1] || null;
   const blowerOnVal = extractIntFromSection(blowerSection, 'on', ',"level"');
   const blowerLevelVal = extractIntFromSection(blowerSection, 'level', '(?:\\}|$)');
 
@@ -563,7 +566,7 @@ function handleNotification(event) {
   const fanOnVal = extractIntFromSection(fanSection, 'on', ',"level"');
   const fanLevelVal = extractIntFromSection(fanSection, 'level', '\\}');
 
-  const o4Section = (jsonStr.match(/"O4":\{(.*?)\},"O5"/) || [])[1] || null;
+  const o4Section = (jsonStr.match(/"O4":\{(.*?)\}[^"]*,"O5"/) || [])[1] || null;
   const co2SocketOnVal = extractIntFromSection(o4Section, 'on', '(?:\\}|$)');
 
   if (jsonStr.includes('"sensor"') && (co2Val !== null || humiVal !== null || tempVal !== null)) {

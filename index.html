@@ -120,7 +120,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.47</span></h1>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.48</span></h1>
 <div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
 
@@ -231,6 +231,18 @@ const logCount = document.getElementById('logCount');
 
 let reconnectInProgress = false;
 
+// --- Zombie-Pipe-Erkennung ---
+// Bestätigt via chrome://bluetooth-internals (24.07.2026): GATT bleibt
+// "Connected", während gleichzeitig keine Notifications mehr ankommen -
+// klassischer Web-Bluetooth-"Zombie"-Fall (siehe WebBluetoothCG/web-bluetooth
+// Issue #500: die Notification-Zustellung kann intern blockieren, ohne dass
+// ein gattserverdisconnected-Event ausgelöst wird). Ein aktiver Read auf eine
+// Standard-Characteristic ist eine echte GATT-Transaktion und unterscheidet
+// zuverlässig "Pipe blockiert" von "Verbindung wirklich tot".
+let pingInFlight = false;
+let lastZombieCheckAt = null;
+let consecutiveZombieRecoveries = 0;
+
 async function attemptSoftReconnect() {
   if (!device) return false;
   try {
@@ -268,6 +280,86 @@ async function attemptSoftReconnect() {
   } catch (err) {
     console.warn('Soft-Reconnect fehlgeschlagen:', err.message);
     return false;
+  }
+}
+
+// Abonniert die Notify-Characteristic neu, OHNE die GATT-Verbindung selbst zu
+// trennen - deutlich leichter/schneller als attemptSoftReconnect(), weil kein
+// neuer GATT-Verbindungsaufbau nötig ist. Passend als Recovery, wenn der
+// aktive Ping zeigt, dass die Verbindung an sich noch lebt und nur die
+// Notification-Pipe blockiert.
+async function attemptNotificationResubscribe(reason) {
+  if (!notifyChar) return false;
+  console.warn('Notify-Resubscribe (' + reason + ')…');
+  try {
+    await notifyChar.stopNotifications();
+    await new Promise(r => setTimeout(r, 300));
+    await notifyChar.startNotifications();
+
+    const beforeTs = lastPacketTimestamp;
+    const gotRealData = await new Promise((resolve) => {
+      const checkStart = Date.now();
+      const iv = setInterval(() => {
+        if (lastPacketTimestamp !== beforeTs) {
+          clearInterval(iv);
+          resolve(true);
+        } else if (Date.now() - checkStart > 8000) {
+          clearInterval(iv);
+          resolve(false);
+        }
+      }, 300);
+    });
+
+    if (gotRealData) {
+      consecutiveZombieRecoveries++;
+      setStatus('connected', 'Notify-Pipe erfolgreich neu abonniert: ' + device.name);
+    }
+    return gotRealData;
+  } catch (err) {
+    console.warn('Notify-Resubscribe fehlgeschlagen:', err.message);
+    return false;
+  }
+}
+
+// Aktiver Gesundheitscheck der GATT-Verbindung während einer Stille-Phase:
+// liest die Standard-"Device Name"-Characteristic (immer vorhanden, jedes
+// BLE-Gerät hat den Generic-Access-Service). Ein erfolgreicher Read ist eine
+// echte abgeschlossene GATT-Transaktion und beweist damit zweifelsfrei, dass
+// die Verbindung technisch lebt - im Unterschied zu device.gatt.connected,
+// das nur einen zwischengespeicherten Status widerspiegelt und beim Zombie-
+// Fall fälschlich weiter "true" zeigt.
+async function activePingCheck(silentForMs) {
+  if (pingInFlight || !device || !device.gatt.connected) return;
+  const now = Date.now();
+  if (lastZombieCheckAt && (now - lastZombieCheckAt) < 10000) return; // nicht öfter als alle 10s prüfen
+  lastZombieCheckAt = now;
+
+  pingInFlight = true;
+  let linkAlive = false;
+  try {
+    const gaService = await device.gatt.getPrimaryService(0x1800);
+    const nameChar = await gaService.getCharacteristic(0x2a00);
+    await nameChar.readValue();
+    linkAlive = true;
+  } catch (err) {
+    linkAlive = false;
+  }
+  pingInFlight = false;
+
+  pushDebugLog({
+    t: Date.now(),
+    packetNum: packetCount,
+    status: linkAlive ? 'ping-ok-zombie' : 'ping-failed',
+    rawText: '',
+    errorMsg: linkAlive
+      ? 'Aktiver Read erfolgreich trotz ' + Math.round(silentForMs / 1000) + 's Stille - GATT lebt, Notify-Pipe blockiert (Zombie)'
+      : 'Aktiver Read fehlgeschlagen nach ' + Math.round(silentForMs / 1000) + 's Stille - Verbindung vermutlich wirklich tot'
+  });
+
+  if (linkAlive) {
+    setStatus('connected', 'Zombie-Pipe erkannt (GATT lebt, keine Daten) - abonniere Notify neu…');
+    await attemptNotificationResubscribe('Zombie-Pipe erkannt nach ' + Math.round(silentForMs / 1000) + 's');
+    // Bei Fehlschlag übernimmt der reguläre 60s-Trigger unten den vollen forceReconnect()
   }
 }
 
@@ -327,6 +419,13 @@ watchdogWorker.onmessage = () => {
   // Stille gehen wir von einer echten toten Verbindung aus und greifen ein.
   if (silentFor > 60000) {
     forceReconnect('Keine Daten seit ' + Math.round(silentFor/1000) + 's');
+  } else if (silentFor > 20000 && device.gatt.connected) {
+    setStatus('connected', 'Warte auf Daten… (seit ' + Math.round(silentFor/1000) + 's still)');
+    // Ab 20s zusätzlich aktiv prüfen, ob es sich um die bekannte Zombie-Pipe
+    // handelt (bestätigt 24.07.2026 via bluetooth-internals) - bei Erfolg wird
+    // dort direkt ein leichter Notify-Resubscribe versucht, ohne auf den
+    // vollen 60s-Reconnect warten zu müssen.
+    activePingCheck(silentFor);
   } else if (silentFor > 15000 && device.gatt.connected) {
     setStatus('connected', 'Warte auf Daten… (seit ' + Math.round(silentFor/1000) + 's still)');
   }
@@ -507,6 +606,7 @@ function stripPacketHeader(bytes) {
 
 function handleNotification(event) {
   lastPacketTimestamp = Date.now();
+  lastZombieCheckAt = null; // neue Stille-Episode beginnt erst wieder nach der nächsten Lücke
   packetCount++;
   const value = event.target.value;
   const rawBytes = new Uint8Array(value.buffer);

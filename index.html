@@ -121,7 +121,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.36</span></h1>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.37</span></h1>
 <div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
 
@@ -230,6 +230,8 @@ const disconnectBtn = document.getElementById('disconnectBtn');
 const rawOut = document.getElementById('rawOut');
 const logCount = document.getElementById('logCount');
 
+let reconnectInProgress = false;
+
 async function attemptSoftReconnect() {
   if (!device) return false;
   try {
@@ -240,9 +242,33 @@ async function attemptSoftReconnect() {
     notifyChar = await service.getCharacteristic(NOTIFY_UUID);
     await notifyChar.startNotifications();
     notifyChar.addEventListener('characteristicvaluechanged', handleNotification);
-    setStatus('connected', 'Schnell wiederverbunden: ' + device.name);
-    lastPacketTimestamp = Date.now();
-    return true;
+    setStatus('connecting', 'Verbindung technisch wiederhergestellt, warte auf echte Daten…');
+
+    // WICHTIG: Nicht sofort als Erfolg werten - die GATT-Verbindung kann
+    // "erfolgreich" zurückgemeldet werden, ohne dass tatsächlich wieder
+    // Pakete fließen (falscher Erfolg, der den Wachhund täuschen würde).
+    // Deshalb erst einige Sekunden auf ein echtes neues Paket warten.
+    const beforeTs = lastPacketTimestamp;
+    const gotRealData = await new Promise((resolve) => {
+      const checkStart = Date.now();
+      const iv = setInterval(() => {
+        if (lastPacketTimestamp !== beforeTs) {
+          clearInterval(iv);
+          resolve(true);
+        } else if (Date.now() - checkStart > 8000) {
+          clearInterval(iv);
+          resolve(false);
+        }
+      }, 300);
+    });
+
+    if (gotRealData) {
+      setStatus('connected', 'Wiederverbunden mit echten Daten: ' + device.name);
+      return true;
+    } else {
+      console.warn('Soft-Reconnect: Verbindung stand, aber keine echten Daten in 8s - werte als fehlgeschlagen');
+      return false;
+    }
   } catch (err) {
     console.warn('Soft-Reconnect fehlgeschlagen:', err.message);
     return false;
@@ -250,17 +276,22 @@ async function attemptSoftReconnect() {
 }
 
 async function forceReconnect(reason) {
+  if (reconnectInProgress) return; // kein doppelter Versuch parallel
+  reconnectInProgress = true;
   console.warn('Erzwinge Reconnect: ' + reason);
   if (navigator.vibrate) {
     try { navigator.vibrate([200, 100, 200]); } catch (e) { /* ignore */ }
   }
   setStatus('connecting', reason + ' - schneller Reconnect-Versuch…');
-  lastPacketTimestamp = Date.now(); // verhindert mehrfaches Auslösen während des Versuchs
 
   // Zuerst einen schnellen, leichten Reconnect auf demselben Geräte-Objekt
   // versuchen - deutlich schneller als ein kompletter Seiten-Reload, und
   // reicht oft schon aus (Zombie-Zustand ist nicht immer der Fall).
+  // lastPacketTimestamp wird hier bewusst NICHT zurückgesetzt, damit der
+  // Wachhund die echte Stille weiter korrekt misst, falls der Soft-Reconnect
+  // nur scheinbar erfolgreich ist.
   const softOk = await attemptSoftReconnect();
+  reconnectInProgress = false;
   if (softOk) return;
 
   // Nur falls das nicht klappt: kompletter Reload als letzter Ausweg

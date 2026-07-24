@@ -124,7 +124,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.39</span></h1>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.41</span></h1>
 <div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
 
@@ -144,11 +144,11 @@
     <div class="metric temp"><div class="label">Temp</div><div class="value" id="valTemp">—</div></div>
     <div class="metric vpd"><div class="label">VPD</div><div class="value" id="valVpd">—</div></div>
   </div>
-  <div class="grid" style="margin-top:10px;grid-template-columns:1fr 1fr;">
+  <div class="grid" style="margin-top:10px;">
     <div class="metric"><div class="label">Boden-Temp</div><div class="value" style="color:#ff7b72;" id="valTempSoil">—</div></div>
     <div class="metric"><div class="label">Boden-Feuchte</div><div class="value" style="color:#56d4dd;" id="valHumiSoil">—</div></div>
   </div>
-  <div class="grid" style="margin-top:10px;grid-template-columns:1fr 1fr;">
+  <div class="grid" style="margin-top:10px;">
     <div class="metric"><div class="label">PPFD</div><div class="value" style="color:#f2cc60;" id="valPpfd">—</div></div>
     <div class="metric"><div class="label">Licht-Stufe</div><div class="value" style="color:#e3b341;" id="valLightLevel">—</div></div>
     <div class="metric"><div class="label">Inline-Lüfter</div><div class="value" style="color:#a5a5f0;" id="valBlowerLevel">—</div></div>
@@ -179,8 +179,13 @@
 </div>
 
 <div class="card">
+  <div class="label" style="font-size:0.75rem;color:#8b949e;margin-bottom:6px;">CO2-Zusammenhang (CO2, Inline-Lüfter, CO2-Steckdose)</div>
+  <div class="chart-container"><canvas id="chart6"></canvas></div>
+</div>
+
+<div class="card">
   <div class="label" style="font-size:0.75rem;color:#8b949e;margin-bottom:6px;">Gesamt-Übersicht (CO2, Feuchte, Temp, VPD, PPFD, Inline-Lüfter)</div>
-  <div class="chart-container" style="height:60vh;"><canvas id="chart6"></canvas></div>
+  <div class="chart-container" style="height:60vh;"><canvas id="chart7"></canvas></div>
 </div>
 
 <div class="card">
@@ -707,7 +712,11 @@ const chart = new Chart(ctx, {
 });
 
 function updateChart() {
-  const rawRecent = dataLog.slice(-120); // letzte 120 Punkte
+  // Ersten Messpunkt überspringen: direkt nach einem (Re-)Connect haben
+  // manche Felder noch keinen jemals gesehenen Wert (kein Carry-Forward
+  // möglich), wodurch Kurven versetzt zueinander zu starten scheinen.
+  const chartSource = dataLog.length > 1 ? dataLog.slice(1) : dataLog;
+  const rawRecent = chartSource.slice(-120); // letzte 120 Punkte
 
   // Bei Zeitlücken > 30 Sekunden zwischen zwei Messpunkten (das 5-fache des
   // normalen ~6-Sekunden-Rhythmus) einen künstlichen "Leerpunkt" einfügen,
@@ -747,12 +756,17 @@ function updateChart() {
   chart5.update('none');
 
   chart6.data.datasets[0].data = recent.map(p => pt(p, 'co2'));
-  chart6.data.datasets[1].data = recent.map(p => pt(p, 'humi'));
-  chart6.data.datasets[2].data = recent.map(p => pt(p, 'temp'));
-  chart6.data.datasets[3].data = recent.map(p => pt(p, 'vpd'));
-  chart6.data.datasets[4].data = recent.map(p => pt(p, 'ppfd'));
-  chart6.data.datasets[5].data = recent.map(p => pt(p, 'blowerLevel'));
+  chart6.data.datasets[1].data = recent.map(p => pt(p, 'blowerLevel'));
+  chart6.data.datasets[2].data = recent.map(p => pt(p, 'co2SocketOn'));
   chart6.update('none');
+
+  chart7.data.datasets[0].data = recent.map(p => pt(p, 'co2'));
+  chart7.data.datasets[1].data = recent.map(p => pt(p, 'humi'));
+  chart7.data.datasets[2].data = recent.map(p => pt(p, 'temp'));
+  chart7.data.datasets[3].data = recent.map(p => pt(p, 'vpd'));
+  chart7.data.datasets[4].data = recent.map(p => pt(p, 'ppfd'));
+  chart7.data.datasets[5].data = recent.map(p => pt(p, 'blowerLevel'));
+  chart7.update('none');
 }
 
 // Chart 2: Temp & VPD
@@ -854,8 +868,36 @@ const chart5 = new Chart(ctx5, {
 // zusammen in einem Chart, um Zusammenhänge zu erkennen (auf Wunsch, auch
 // wenn dadurch unübersichtlicher). Mehrere Achsen, teils ausgeblendet
 // (nur Tick-Farbe als Referenz), um das Chaos etwas einzugrenzen.
+// Chart 6: CO2-Zusammenhang - CO2, Inline-Lüfter (%), CO2-Steckdose (0/1)
+// zusammen, um zu sehen ob/wie Lüftertaktung und CO2-Steckdose mit dem
+// tatsächlichen CO2-Verlauf korrelieren.
 const ctx6 = document.getElementById('chart6').getContext('2d');
 const chart6 = new Chart(ctx6, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      { label: 'CO2 (ppm)', data: [], borderColor: '#d2a8ff', backgroundColor: 'transparent', yAxisID: 'yCo2', tension: 0.2 },
+      { label: 'Inline-Lüfter (%)', data: [], borderColor: '#a5a5f0', backgroundColor: 'transparent', yAxisID: 'yPct', tension: 0.2, borderDash: [6, 4] },
+      { label: 'CO2-Steckdose (0/1)', data: [], borderColor: '#79c0ff', backgroundColor: 'transparent', yAxisID: 'yBin', tension: 0, stepped: true, borderDash: [2, 2] }
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    scales: {
+      x: timeAxisConfig,
+      yCo2: { position: 'left', ticks: { color: '#d2a8ff' }, grid: { color: '#21262d' } },
+      yPct: { position: 'right', min: 0, max: 100, ticks: { color: '#a5a5f0' }, grid: { display: false } },
+      yBin: { position: 'right', min: 0, max: 1, display: false }
+    },
+    plugins: { legend: { labels: { color: '#e6edf3' } }, tooltip: tooltipConfig }
+  }
+});
+
+const ctx7 = document.getElementById('chart7').getContext('2d');
+const chart7 = new Chart(ctx7, {
   type: 'line',
   data: {
     labels: [],

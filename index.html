@@ -120,7 +120,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.46</span></h1>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.47</span></h1>
 <div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
 
@@ -668,6 +668,7 @@ function processPayload(parsed) {
 
   if (co2 !== null || humi !== null) {
     dataLog.push({ t: Date.now(), co2, humi, temp, vpd, ppfd, tempSoil, humiSoil, lightLevel, blowerOn, blowerLevel, fanOn, fanLevel, co2SocketOn });
+    if (dataLog.length > 2000) dataLog.shift(); // rollierend begrenzt gegen unbegrenztes Wachstum bei Langzeitläufen
     updateLogCountDisplay();
     updateChart();
     saveToLocalStorage();

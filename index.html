@@ -120,7 +120,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.48</span></h1>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.49</span></h1>
 <div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
 
@@ -195,6 +195,14 @@ const NOTIFY_UUID = 0xff01;  // bestätigt: Notify-Property vorhanden
 let device, server, notifyChar;
 let dataLog = [];
 let byteBuffer = [];
+// Schutz gegen endlos wachsenden Puffer: Falls eine Nachricht nie eine
+// schließende Klammer findet (beschädigtes/verlorenes BLE-Fragment), wächst
+// byteBuffer sonst unbegrenzt weiter, OHNE dass je wieder eine gültige
+// Nachricht erkannt wird - Notifications kommen weiter an (lastPacketTimestamp
+// wächst, Wachhund sieht "alles gut"), aber es werden nie wieder Daten
+// extrahiert, bis die Seite neu geladen wird. Bestätigter Bug, 25.07.2026
+// (8+ Minuten stumme Blockade bei laufender Verbindung beobachtet).
+const MAX_BYTE_BUFFER_LENGTH = 4000; // ein vollständiges JSON-Paket ist < 1000 Bytes
 let wakeLock = null;
 let shouldAutoReconnect = false;
 let lastPacketTimestamp = null;
@@ -612,6 +620,23 @@ function handleNotification(event) {
   const rawBytes = new Uint8Array(value.buffer);
   const payloadBytes = stripPacketHeader(rawBytes);
   for (const b of payloadBytes) byteBuffer.push(b);
+
+  // Überlauf-Schutz: Falls der Puffer trotz laufend eintreffender Pakete nie
+  // wieder auf eine gültige, geschlossene JSON-Nachricht kommt, wächst er
+  // sonst unbegrenzt weiter und blockiert JEDE künftige Datenextraktion
+  // dauerhaft. Zurücksetzen verwirft nur das kaputte Fragment - die nächste
+  // eintreffende Nachricht kann sauber neu beginnen.
+  if (byteBuffer.length > MAX_BYTE_BUFFER_LENGTH) {
+    pushDebugLog({
+      t: Date.now(),
+      packetNum: packetCount,
+      status: 'buffer-overflow-reset',
+      rawText: '',
+      errorMsg: 'byteBuffer erreichte ' + byteBuffer.length + ' Bytes ohne gültige JSON-Nachricht - zurückgesetzt, um dauerhafte Blockade zu vermeiden'
+    });
+    byteBuffer = [];
+    return;
+  }
 
   const asText = new TextDecoder('utf-8', { fatal: false }).decode(payloadBytes);
   const hadHeader = rawBytes.length !== payloadBytes.length;

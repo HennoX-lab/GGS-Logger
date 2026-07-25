@@ -120,7 +120,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.49</span></h1>
+<h1>🌱 GGS Live-Logger <span style="font-size:0.9rem;color:#8b949e;font-weight:400;">v1.50</span></h1>
 <div class="sub">Klima- und Boden-Log für HennoX Amethyst</div>
 
 
@@ -203,6 +203,12 @@ let byteBuffer = [];
 // extrahiert, bis die Seite neu geladen wird. Bestätigter Bug, 25.07.2026
 // (8+ Minuten stumme Blockade bei laufender Verbindung beobachtet).
 const MAX_BYTE_BUFFER_LENGTH = 4000; // ein vollständiges JSON-Paket ist < 1000 Bytes
+// Normalzyklus: eine Nachricht ist erfahrungsgemäß nach ~6s vollständig
+// zusammengesetzt. Deutlich großzügigeres Timeout als Sicherheitsnetz, falls
+// ein Puffer bei kleinen Fragmenten unter der Byte-Grenze bleibt, aber
+// trotzdem nie eine gültige Nachricht vervollständigt.
+const MAX_BYTE_BUFFER_AGE_MS = 15000;
+let byteBufferStartedAt = null;
 let wakeLock = null;
 let shouldAutoReconnect = false;
 let lastPacketTimestamp = null;
@@ -619,7 +625,26 @@ function handleNotification(event) {
   const value = event.target.value;
   const rawBytes = new Uint8Array(value.buffer);
   const payloadBytes = stripPacketHeader(rawBytes);
+  if (byteBuffer.length === 0) byteBufferStartedAt = Date.now();
   for (const b of payloadBytes) byteBuffer.push(b);
+
+  // Zeit-Timeout: Eine vollständige Nachricht braucht normalerweise nur einen
+  // Bruchteil des ~6s-Messzyklus. Falls der Puffer deutlich länger als das
+  // offen bleibt (auch unterhalb der Byte-Grenze, z.B. bei kleinen
+  // Fragmenten), ist das ein klares Zeichen für einen dauerhaft kaputten Rest
+  // statt normaler Zusammensetzung - zurücksetzen statt weiter warten.
+  if (byteBufferStartedAt !== null && (Date.now() - byteBufferStartedAt) > MAX_BYTE_BUFFER_AGE_MS) {
+    pushDebugLog({
+      t: Date.now(),
+      packetNum: packetCount,
+      status: 'buffer-timeout-reset',
+      rawText: '',
+      errorMsg: 'byteBuffer seit ' + Math.round((Date.now() - byteBufferStartedAt) / 1000) + 's offen ohne gültige JSON-Nachricht - zurückgesetzt'
+    });
+    byteBuffer = [];
+    byteBufferStartedAt = null;
+    return;
+  }
 
   // Überlauf-Schutz: Falls der Puffer trotz laufend eintreffender Pakete nie
   // wieder auf eine gültige, geschlossene JSON-Nachricht kommt, wächst er
@@ -635,6 +660,7 @@ function handleNotification(event) {
       errorMsg: 'byteBuffer erreichte ' + byteBuffer.length + ' Bytes ohne gültige JSON-Nachricht - zurückgesetzt, um dauerhafte Blockade zu vermeiden'
     });
     byteBuffer = [];
+    byteBufferStartedAt = null;
     return;
   }
 
@@ -658,6 +684,7 @@ function handleNotification(event) {
 
   const jsonStrRaw = candidate.slice(0, endIdx + 1);
   byteBuffer = [];
+  byteBufferStartedAt = null;
 
   if (!jsonStrRaw.includes('"temp"') && !jsonStrRaw.includes('"co2"') && !jsonStrRaw.includes('"sensor"')) {
     packetHistory.push(`[übersprungen: keine Sensordaten in dieser Nachricht]`);

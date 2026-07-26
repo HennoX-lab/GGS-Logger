@@ -156,7 +156,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span id="versionBadge" style="font-size:0.9rem;color:#8b949e;font-weight:400;cursor:pointer;text-decoration:underline dotted;" title="Änderungshistorie anzeigen">v1.61</span></h1>
+<h1>🌱 GGS Live-Logger <span id="versionBadge" style="font-size:0.9rem;color:#8b949e;font-weight:400;cursor:pointer;text-decoration:underline dotted;" title="Änderungshistorie anzeigen">v1.62</span></h1>
 
 <div id="changelogOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;padding:16px;overflow-y:auto;">
   <div style="background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px;max-width:600px;margin:0 auto;">
@@ -825,12 +825,23 @@ function handleNotification(event) {
     return isNaN(val) ? null : val;
   }
 
+  // "An/Aus"-Felder können per Definition nur 0 oder 1 sein. Bestätigt
+  // 26.07.2026: Bei Byte-Korruption im JSON können vereinzelt Ziffern des
+  // Störmusters den Bereinigungsfilter überleben und als Zahl durchrutschen
+  // (z.B. Fan_An=51/61 statt 0/1 beobachtet) - ohne diese Prüfung würde ein
+  // solcher Ausreißer unbemerkt ins dataLog/CSV übernommen. Alles außer 0/1
+  // wird verworfen (null), damit greift automatisch der normale Fallback auf
+  // den letzten bekannten gültigen Wert statt der Zahlenmüll.
+  function sanitizeBoolInt(val) {
+    return (val === 0 || val === 1) ? val : null;
+  }
+
   const lightSection = (jsonStr.match(/"light":\{(.*?)\}[^"]*,"light2"/) || [])[1] || null;
   const lightLevelVal = extractIntFromSection(lightSection, 'level', '(?:\\}|$)');
   const lightModeVal = extractIntFromSection(lightSection, 'modeType', ',"level"');
 
   const blowerSection = (jsonStr.match(/"blower":\{(.*?)\}[^"]*,"fan"/) || [])[1] || null;
-  let blowerOnVal = extractIntFromSection(blowerSection, 'on', ',"level"');
+  let blowerOnVal = sanitizeBoolInt(extractIntFromSection(blowerSection, 'on', ',"level"'));
   const blowerLevelVal = extractIntFromSection(blowerSection, 'level', '(?:\\}|$)');
   // Bestätigt 25.07.2026 anhand Rohdaten: Der Controller sendet das "on"-Feld
   // im blower-Objekt NUR, wenn der Lüfter tatsächlich läuft - bei Stillstand
@@ -843,11 +854,11 @@ function handleNotification(event) {
   }
 
   const fanSection = (jsonStr.match(/"fan":\{(.*)/) || [])[1] || null;
-  const fanOnVal = extractIntFromSection(fanSection, 'on', ',"level"');
+  const fanOnVal = sanitizeBoolInt(extractIntFromSection(fanSection, 'on', ',"level"'));
   const fanLevelVal = extractIntFromSection(fanSection, 'level', '\\}');
 
   const o4Section = (jsonStr.match(/"O4":\{(.*?)\}[^"]*,"O5"/) || [])[1] || null;
-  const co2SocketOnVal = extractIntFromSection(o4Section, 'on', '(?:\\}|$)');
+  const co2SocketOnVal = sanitizeBoolInt(extractIntFromSection(o4Section, 'on', '(?:\\}|$)'));
 
   if (jsonStr.includes('"sensor"') && (co2Val !== null || humiVal !== null || tempVal !== null)) {
     rawOut.textContent = 'Sensorwerte extrahiert: temp=' + tempVal + ' humi=' + humiVal + ' co2=' + co2Val + ' vpd=' + vpdVal;
@@ -1323,6 +1334,9 @@ tryAutoReconnectAfterReload();
 
 // --- Änderungshistorie ---
 const CHANGELOG = [
+  { version: '1.62', date: '26.07.2026', changes: [
+    'Bug behoben: Fan_An (und potenziell blowerOn/co2SocketOn) konnte durch Byte-Korruption vereinzelt falsche Zahlen wie 51/61 statt 0/1 annehmen - neue sanitizeBoolInt()-Prüfung verwirft jetzt alles außer 0/1 für alle drei "An/Aus"-Felder, Fallback auf letzten gültigen Wert greift automatisch'
+  ]},
   { version: '1.61', date: '26.07.2026', changes: [
     'Cache-Limit (dataLog) von 2000 auf 16384 Punkte (2^14) angehoben - deckt jetzt ~24h statt ~3,5h für den CSV-Export ab',
     'Downsampling für die Gesamtverlauf-Chartansicht ergänzt, greift erst oberhalb von 2000 Punkten (bis dahin unverändert ruckelfrei) - betrifft nur die Darstellung, CSV-Export bleibt immer vollständig'

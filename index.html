@@ -156,7 +156,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span id="versionBadge" style="font-size:0.9rem;color:#8b949e;font-weight:400;cursor:pointer;text-decoration:underline dotted;" title="Änderungshistorie anzeigen">v1.62</span></h1>
+<h1>🌱 GGS Live-Logger <span id="versionBadge" style="font-size:0.9rem;color:#8b949e;font-weight:400;cursor:pointer;text-decoration:underline dotted;" title="Änderungshistorie anzeigen">v1.63</span></h1>
 
 <div id="changelogOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;padding:16px;overflow-y:auto;">
   <div style="background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px;max-width:600px;margin:0 auto;">
@@ -504,6 +504,15 @@ watchdogWorker.onmessage = () => {
     if (!metricEl) continue;
     const freshAt = fieldFreshAt[elId];
     const isStale = freshAt === undefined || (staleNow - freshAt) > STALE_THRESHOLD_MS;
+    const wasStale = metricEl.classList.contains('stale');
+    if (isStale !== wasStale) {
+      // Diagnose-Log bei JEDEM Zustandswechsel (frisch<->grau) - hilft beim
+      // nächsten unerklärten Ausgrauen, live nachzuvollziehen, ob wirklich
+      // freshAt zu alt war oder ob hier ein anderer Mechanismus eingreift.
+      const age = freshAt === undefined ? 'nie' : Math.round((staleNow - freshAt) / 1000) + 's';
+      console.warn('[Stale-Wechsel] ' + elId + ': ' + (isStale ? 'wird grau' : 'wird wieder frisch') + ' (Alter: ' + age + ')');
+      pushDebugLog({ t: staleNow, packetNum: packetCount, status: isStale ? 'tile-stale' : 'tile-fresh', rawText: '', errorMsg: elId + ' Alter: ' + age });
+    }
     metricEl.classList.toggle('stale', isStale);
   }
 
@@ -1334,6 +1343,9 @@ tryAutoReconnectAfterReload();
 
 // --- Änderungshistorie ---
 const CHANGELOG = [
+  { version: '1.63', date: '26.07.2026', changes: [
+    'Diagnose-Logging für Kachel-Ausgrauen ergänzt: Jeder Wechsel frisch<->grau wird jetzt mit exaktem Alter des letzten Werts ins Debug-Log geschrieben (Status "tile-stale"/"tile-fresh") - Grund für ein vom Nutzer beobachtetes, aber im Code nicht nachvollziehbares Ausgrauen der Inline-Lüfter-Kachel konnte trotz gründlicher Code-Durchsicht nicht gefunden werden, dieses Logging soll die Ursache beim nächsten Auftreten live beweisen statt zu raten'
+  ]},
   { version: '1.62', date: '26.07.2026', changes: [
     'Bug behoben: Fan_An (und potenziell blowerOn/co2SocketOn) konnte durch Byte-Korruption vereinzelt falsche Zahlen wie 51/61 statt 0/1 annehmen - neue sanitizeBoolInt()-Prüfung verwirft jetzt alles außer 0/1 für alle drei "An/Aus"-Felder, Fallback auf letzten gültigen Wert greift automatisch'
   ]},

@@ -156,7 +156,7 @@
 </head>
 <body>
 
-<h1>🌱 GGS Live-Logger <span id="versionBadge" style="font-size:0.9rem;color:#8b949e;font-weight:400;cursor:pointer;text-decoration:underline dotted;" title="Änderungshistorie anzeigen">v1.59</span></h1>
+<h1>🌱 GGS Live-Logger <span id="versionBadge" style="font-size:0.9rem;color:#8b949e;font-weight:400;cursor:pointer;text-decoration:underline dotted;" title="Änderungshistorie anzeigen">v1.61</span></h1>
 
 <div id="changelogOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;padding:16px;overflow-y:auto;">
   <div style="background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px;max-width:600px;margin:0 auto;">
@@ -241,6 +241,16 @@ const NOTIFY_UUID = 0xff01;  // bestätigt: Notify-Property vorhanden
 
 let device, server, notifyChar;
 let dataLog = [];
+// Zählt ALLE jemals erfolgreich geparsten Graph-Punkte, unbegrenzt - im Unterschied
+// zu dataLog.length, das durch den 2000er-Rollcache gedeckelt ist. Nötig, damit
+// die Δ-Anzeige (Rohpakete vs. im Graph) bei Langzeit-Sessions über die Cache-
+// Grenze hinaus weiter aussagekräftig bleibt (25.07. entdeckt: Δ wuchs sonst
+// künstlich, sobald dataLog.length bei 2000 einfriert, obwohl echte Datenpunkte
+// weiter erfolgreich verarbeitet wurden).
+let totalDataPointsEver = 0;
+// 2^14 = 16384 Punkte ≈ 24h bei ~6,4s/Punkt-Rhythmus - deckt einen vollen
+// Tageszyklus für den CSV-Export ab, statt wie zuvor nur ~3,5h.
+const MAX_DATALOG_LENGTH = 16384;
 let byteBuffer = [];
 // Schutz gegen endlos wachsenden Puffer: Falls eine Nachricht nie eine
 // schließende Klammer findet (beschädigtes/verlorenes BLE-Fragment), wächst
@@ -275,6 +285,7 @@ function loadFromLocalStorage() {
     const saved = localStorage.getItem('ggs_datalog');
     if (saved) {
       dataLog = JSON.parse(saved);
+      totalDataPointsEver = dataLog.length;
       updateLogCountDisplay();
       updateChart();
     }
@@ -920,7 +931,8 @@ function processPayload(parsed) {
 
   if (co2 !== null || humi !== null) {
     dataLog.push({ t: Date.now(), co2, humi, temp, vpd, ppfd, tempSoil, humiSoil, lightLevel, blowerOn, blowerLevel, fanOn, fanLevel, co2SocketOn });
-    if (dataLog.length > 2000) dataLog.shift(); // rollierend begrenzt gegen unbegrenztes Wachstum bei Langzeitläufen
+    totalDataPointsEver++;
+    if (dataLog.length > MAX_DATALOG_LENGTH) dataLog.shift(); // rollierend begrenzt gegen unbegrenztes Wachstum bei Langzeitläufen
     updateLogCountDisplay();
     updateChart();
     saveToLocalStorage();
@@ -945,18 +957,19 @@ function updateLogCountDisplay() {
     logCount.textContent = '0 Rohpakete · 0 im Graph' + resetStr + uptimeStr + ' · jetzt: ' + nowStr;
     return;
   }
-  // Echte Gesamt-Sitzung, unabhängig vom 10-Minuten-Anzeigefenster der Charts
+  // Puffer-Fenster: nur die aktuell im Speicher gehaltenen Punkte (Cache auf
+  // 2000 begrenzt) - NICHT die Gesamt-Sitzungsdauer. Für die echte Gesamtdauer
+  // "Verbunden seit" oben nutzen, die läuft unabhängig vom Cache weiter.
   const first = dataLog[0].t;
   const last = dataLog[dataLog.length - 1].t;
   const duration = formatDuration(last - first);
   const firstTime = new Date(first).toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
   const lastTime = new Date(last).toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-  // Differenz = Rohpakete, die NICHT zu einem vollständigen Graph-Punkt wurden
-  // (Systemnachrichten ohne Sensordaten, buffer-timeout/-overflow-Resets, etc.)
-  // - wachsende Differenz über die Zeit zeigt live, wie oft die Puffer-Logik
-  // eingreifen musste, ohne erst den CSV-Export abwarten zu müssen.
-  const diff = packetCount - dataLog.length;
-  logCount.textContent = packetCount + ' Rohpakete · ' + dataLog.length + ' im Graph (Δ ' + diff + ')' + resetStr + uptimeStr + ' · Zeitraum: ' + duration + ' · erster: ' + firstTime + ' · zuletzt: ' + lastTime + ' · jetzt: ' + nowStr;
+  // Differenz auf Basis von totalDataPointsEver (unbegrenzt) statt dataLog.length
+  // (auf 2000 gedeckelt) - sonst würde Δ künstlich explodieren, sobald der Cache
+  // voll ist, obwohl die Verarbeitung selbst weiter normal läuft (25.07. entdeckt).
+  const diff = packetCount - totalDataPointsEver;
+  logCount.textContent = packetCount + ' Rohpakete · ' + totalDataPointsEver + ' gesamt verarbeitet (Δ ' + diff + ') · ' + dataLog.length + ' im Graph-Puffer' + resetStr + uptimeStr + ' · Puffer-Fenster: ' + duration + ' (' + firstTime + '–' + lastTime + ') · jetzt: ' + nowStr;
 }
 
 // Chart Setup
@@ -1008,9 +1021,26 @@ const CHART_WINDOW_MS = 10 * 60 * 1000; // festes 10-Minuten-Zeitfenster
 const GAP_THRESHOLD_MS = 30 * 1000; // ab hier gilt eine Lücke als "Aussetzer", nicht normale Streuung
 
 // Pro Chart getrennt umschaltbar zwischen Live-Fenster (10 Min, rollierend)
-// und Gesamtverlauf (alle im Speicher gehaltenen Punkte, siehe dataLog-Limit
-// von 2000 Einträgen). true = Gesamtverlauf aktiv.
+// und Gesamtverlauf (alle im Speicher gehaltenen Punkte, siehe MAX_DATALOG_LENGTH
+// oben, aktuell 16384 ≈ 24h). true = Gesamtverlauf aktiv.
 const fullViewState = { chart: false, chart2: false, chart3: false, chart4: false, chart5: false, chart6: false };
+
+// Downsampling NUR für die Gesamtverlauf-Ansicht, NUR oberhalb dieser Schwelle -
+// bei ≤2000 Punkten (aktuell ruckelfrei bestätigt) wird nichts verändert, jeder
+// Punkt bleibt exakt erhalten. Erst darüber (z.B. bei mehreren Stunden/Tagen im
+// 16384er-Cache) wird per fester Schrittweite ausgedünnt, damit Chart.js nicht
+// jeden einzelnen von zehntausenden Punkten rendern muss. Betrifft NUR die
+// Chart-Darstellung - CSV-Export und alle Rohdaten bleiben immer vollständig.
+const CHART_DOWNSAMPLE_THRESHOLD = 2000;
+function downsampleForChart(source) {
+  if (source.length <= CHART_DOWNSAMPLE_THRESHOLD) return source;
+  const step = Math.ceil(source.length / CHART_DOWNSAMPLE_THRESHOLD);
+  const out = [];
+  for (let i = 0; i < source.length; i += step) out.push(source[i]);
+  // letzten Punkt garantiert mitnehmen, damit der aktuellste Wert nie fehlt
+  if (out[out.length - 1] !== source[source.length - 1]) out.push(source[source.length - 1]);
+  return out;
+}
 
 // Fügt bei Zeitlücken > GAP_THRESHOLD_MS einen künstlichen "Leerpunkt" ein,
 // damit die Kurve dort sichtbar unterbrochen wird statt die Ausfallzeit
@@ -1036,7 +1066,7 @@ function updateChart() {
   const windowStart = now - CHART_WINDOW_MS;
   const rawWindowed = chartSource.filter(p => p.t >= windowStart);
   const recentWindowed = withGapMarkers(rawWindowed);
-  const recentFull = withGapMarkers(chartSource);
+  const recentFull = withGapMarkers(downsampleForChart(chartSource));
 
   // Echte Zeitachse: x = tatsächlicher Zeitstempel (ms), nicht nur Reihenfolge -
   // der Abstand zwischen Punkten spiegelt jetzt die real vergangene Zeit wider.
@@ -1293,6 +1323,14 @@ tryAutoReconnectAfterReload();
 
 // --- Änderungshistorie ---
 const CHANGELOG = [
+  { version: '1.61', date: '26.07.2026', changes: [
+    'Cache-Limit (dataLog) von 2000 auf 16384 Punkte (2^14) angehoben - deckt jetzt ~24h statt ~3,5h für den CSV-Export ab',
+    'Downsampling für die Gesamtverlauf-Chartansicht ergänzt, greift erst oberhalb von 2000 Punkten (bis dahin unverändert ruckelfrei) - betrifft nur die Darstellung, CSV-Export bleibt immer vollständig'
+  ]},
+  { version: '1.60', date: '26.07.2026', changes: [
+    'Bug behoben: Δ-Anzeige (Rohpakete vs. im Graph) wuchs künstlich, sobald der 2000-Punkte-Rollcache voll war - neuer, unbegrenzter Zähler (totalDataPointsEver) statt des gedeckelten dataLog.length',
+    '"Zeitraum/erster/zuletzt" umbenannt zu "Puffer-Fenster" - zeigt jetzt klar erkennbar nur den aktuell gespeicherten Cache-Ausschnitt, nicht die Gesamt-Sitzungsdauer (dafür weiterhin "Verbunden seit" nutzen)'
+  ]},
   { version: '1.59', date: '25.07.2026', changes: [
     'Vollständige Versionshistorie von der unversionierten Frühphase bis heute ergänzt (Quelle: Änderungshistorie-Dokument)'
   ]},

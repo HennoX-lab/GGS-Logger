@@ -1,7 +1,7 @@
 {
-  "name": "GGS Live-Logger — HennoX Amethyst",
+  "name": "GGS Live-Logger",
   "short_name": "GGS Logger",
-  "description": "Klima- und Boden-Log für HennoX Amethyst (Spider Farmer GGS-Controller)",
+  "description": "Klima- und Boden-Log für Spider Farmer GGS-Controller",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0b0f14",
